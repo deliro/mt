@@ -1,4 +1,4 @@
-#![allow(unsafe_code, clippy::similar_names, clippy::map_unwrap_or)]
+#![allow(unsafe_code)]
 
 use std::io::Result;
 use std::path::{Path, PathBuf};
@@ -11,20 +11,20 @@ fn main() -> Result<()> {
         std::env::set_var("PROTOC", &protoc);
     }
 
-    let proto_root = PathBuf::from("vendor/meshtastic-protobufs");
-    let files = collect_protos(&proto_root)?;
+    let root = PathBuf::from("vendor/meshtastic-protobufs");
+    let files = collect_protos(&root)?;
     if files.is_empty() {
         return Err(std::io::Error::new(
             std::io::ErrorKind::NotFound,
             format!(
                 "no .proto files under {} — run `git submodule update --init --recursive`",
-                proto_root.display()
+                root.display()
             ),
         ));
     }
     let mut cfg = prost_build::Config::new();
     cfg.protoc_arg("--experimental_allow_proto3_optional");
-    cfg.compile_protos(&files, &[proto_root.as_path()])?;
+    cfg.compile_protos(&files, &[root.as_path()])?;
     println!("cargo:rerun-if-changed=vendor/meshtastic-protobufs");
     Ok(())
 }

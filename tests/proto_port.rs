@@ -1,4 +1,4 @@
-#![allow(clippy::expect_used, clippy::unwrap_used, clippy::panic, clippy::pedantic, clippy::nursery, clippy::cargo, clippy::indexing_slicing, clippy::integer_division, clippy::collapsible_if, clippy::byte_char_slices, clippy::redundant_pattern_matching)]
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use mt::proto::meshtastic::PortNum;
 use mt::proto::port::{PortPayload, parse};
@@ -17,7 +17,7 @@ fn unknown_port_preserves_bytes() {
 
 #[test]
 fn text_port_parses_utf8() {
-    let p = parse(PortNum::TextMessageApp as i32, "hi".as_bytes()).expect("parse");
+    let p = parse(PortNum::TextMessageApp as i32, b"hi").expect("parse");
     match p {
         PortPayload::Text(t) => assert_eq!(t, "hi"),
         other => panic!("expected Text, got {other:?}"),

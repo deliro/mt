@@ -1,4 +1,4 @@
-#![allow(clippy::expect_used, clippy::unwrap_used, clippy::panic, clippy::pedantic, clippy::nursery, clippy::cargo, clippy::indexing_slicing, clippy::integer_division, clippy::collapsible_if, clippy::byte_char_slices, clippy::redundant_pattern_matching)]
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use mt::domain::ids::BleAddress;
 use mt::domain::profile::ConnectionProfile;
@@ -15,8 +15,8 @@ fn round_trip_profiles_to_toml() {
     save_to(&path, &input).expect("save");
     let loaded = load_from(&path).expect("load");
     assert_eq!(loaded.len(), 2);
-    assert!(matches!(loaded[0], ConnectionProfile::Tcp { .. }));
-    assert!(matches!(loaded[1], ConnectionProfile::Ble { .. }));
+    assert!(matches!(loaded.first(), Some(ConnectionProfile::Tcp { .. })));
+    assert!(matches!(loaded.get(1), Some(ConnectionProfile::Ble { .. })));
 }
 
 #[test]

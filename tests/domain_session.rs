@@ -1,4 +1,4 @@
-#![allow(clippy::expect_used, clippy::unwrap_used, clippy::panic, clippy::pedantic, clippy::nursery, clippy::cargo, clippy::indexing_slicing, clippy::integer_division, clippy::collapsible_if, clippy::byte_char_slices, clippy::redundant_pattern_matching)]
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use mt::domain::channel::{Channel, ChannelRole};
 use mt::domain::ids::{ChannelIndex, ConfigId, NodeId, PacketId};
@@ -107,7 +107,7 @@ fn ready_applies_incoming_text_and_state_changes() {
         direction: Direction::Incoming,
         state: DeliveryState::Delivered,
     };
-    let s = apply(s, HandshakeFragment::Message(msg.clone()));
+    let s = apply(s, HandshakeFragment::Message(msg));
     let s = apply(
         s,
         HandshakeFragment::MessageStateChanged {
@@ -118,7 +118,10 @@ fn ready_applies_incoming_text_and_state_changes() {
     match s {
         SessionState::Ready(snap) => {
             assert_eq!(snap.messages.len(), 1);
-            assert_eq!(snap.messages[0].state, DeliveryState::Failed("no ack".into()));
+            assert_eq!(
+                snap.messages.first().map(|m| m.state.clone()),
+                Some(DeliveryState::Failed("no ack".into())),
+            );
         }
         other => panic!("should be Ready, got {other:?}"),
     }
@@ -144,7 +147,7 @@ fn ready_updates_node_metrics() {
     );
     match s {
         SessionState::Ready(snap) => {
-            assert_eq!(snap.nodes[&NodeId(2)].battery_level, Some(73));
+            assert_eq!(snap.nodes.get(&NodeId(2)).and_then(|n| n.battery_level), Some(73));
         }
         other => panic!("should be Ready, got {other:?}"),
     }

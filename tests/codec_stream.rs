@@ -1,4 +1,4 @@
-#![allow(clippy::expect_used, clippy::unwrap_used, clippy::panic, clippy::pedantic, clippy::nursery, clippy::cargo, clippy::indexing_slicing, clippy::integer_division, clippy::collapsible_if, clippy::byte_char_slices, clippy::redundant_pattern_matching)]
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use bytes::BytesMut;
 use mt::codec::frame::FrameCodec;
@@ -15,7 +15,7 @@ fn decodes_one_frame_across_partial_reads() {
     buf.extend_from_slice(&[0x00, 0x03, b'h']);
     assert!(codec.decode(&mut buf).expect("decode").is_none());
 
-    buf.extend_from_slice(&[b'i', b'!']);
+    buf.extend_from_slice(b"i!");
     let got = codec.decode(&mut buf).expect("decode").expect("frame ready");
     assert_eq!(got.as_slice(), b"hi!");
     assert!(buf.is_empty());

@@ -1,4 +1,4 @@
-#![allow(clippy::expect_used, clippy::unwrap_used, clippy::panic, clippy::pedantic, clippy::nursery, clippy::cargo, clippy::indexing_slicing, clippy::integer_division, clippy::collapsible_if, clippy::byte_char_slices, clippy::redundant_pattern_matching)]
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use std::time::Duration;
 
@@ -15,7 +15,7 @@ use prost::Message;
 use tokio::sync::mpsc;
 use tokio::time::timeout;
 
-fn enc_from(m: meshtastic::FromRadio) -> Vec<u8> {
+fn enc_from(m: &meshtastic::FromRadio) -> Vec<u8> {
     let mut buf = Vec::with_capacity(m.encoded_len());
     m.encode(&mut buf).expect("encode");
     buf
@@ -75,24 +75,19 @@ where
 async fn receives_text_after_connect() {
     let connector: mt::session::Connector = Box::new(move |_profile: ConnectionProfile| {
         async move {
-            let (transport, handle) = MockTransport::new(Script::from_frames(Vec::new()));
-            let echo = handle.clone();
+            let (transport, echo) = MockTransport::new(Script::from_frames(Vec::new()));
             tokio::spawn(async move {
                 for _ in 0..50 {
-                    if let Some(frame) = echo.captured().first() {
-                        if frame.len() > 4 {
-                            if let Ok(msg) = meshtastic::ToRadio::decode(&frame[4..]) {
-                                if let Some(
-                                    meshtastic::to_radio::PayloadVariant::WantConfigId(id),
-                                ) = msg.payload_variant
-                                {
-                                    echo.inject(enc_from(my_info(7)));
-                                    echo.inject(enc_from(config_complete(id)));
-                                    echo.inject(enc_from(text_packet(42, 555, "hello")));
-                                    return;
-                                }
-                            }
-                        }
+                    if let Some(frame) = echo.captured().first()
+                        && let Some(payload) = frame.get(4..)
+                        && let Ok(msg) = meshtastic::ToRadio::decode(payload)
+                        && let Some(meshtastic::to_radio::PayloadVariant::WantConfigId(id)) =
+                            msg.payload_variant
+                    {
+                        echo.inject(enc_from(&my_info(7)));
+                        echo.inject(enc_from(&config_complete(id)));
+                        echo.inject(enc_from(&text_packet(42, 555, "hello")));
+                        return;
                     }
                     tokio::time::sleep(Duration::from_millis(10)).await;
                 }

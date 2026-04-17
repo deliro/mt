@@ -1,4 +1,4 @@
-#![allow(clippy::expect_used, clippy::unwrap_used, clippy::panic, clippy::pedantic, clippy::nursery, clippy::cargo, clippy::indexing_slicing, clippy::integer_division, clippy::collapsible_if, clippy::byte_char_slices, clippy::redundant_pattern_matching)]
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use std::time::Duration;
 
@@ -10,7 +10,7 @@ use mt::transport::BoxedTransport;
 use mt::transport::mock::{MockTransport, Script};
 use prost::Message;
 
-fn frame_from_radio(m: meshtastic::FromRadio) -> Vec<u8> {
+fn frame_from_radio(m: &meshtastic::FromRadio) -> Vec<u8> {
     let mut buf = Vec::with_capacity(m.encoded_len());
     m.encode(&mut buf).expect("encode FromRadio");
     buf
@@ -54,10 +54,10 @@ fn config_complete(id: u32) -> meshtastic::FromRadio {
 async fn completes_when_config_complete_matches_and_populates_my_names() {
     let cfg = ConfigId(12345);
     let (transport, _handle) = MockTransport::new(Script::from_frames(vec![
-        frame_from_radio(my_info(77)),
-        frame_from_radio(node_info(77, "My Node", "MN")),
-        frame_from_radio(node_info(123, "Other", "OT")),
-        frame_from_radio(config_complete(12345)),
+        frame_from_radio(&my_info(77)),
+        frame_from_radio(&node_info(77, "My Node", "MN")),
+        frame_from_radio(&node_info(123, "Other", "OT")),
+        frame_from_radio(&config_complete(12345)),
     ]));
     let boxed: BoxedTransport = Box::pin(transport);
 
@@ -78,8 +78,8 @@ async fn completes_when_config_complete_matches_and_populates_my_names() {
 #[tokio::test(flavor = "current_thread")]
 async fn reports_timeout_when_config_complete_mismatches() {
     let (transport, handle) = MockTransport::new(Script::from_frames(vec![
-        frame_from_radio(my_info(1)),
-        frame_from_radio(config_complete(9999)),
+        frame_from_radio(&my_info(1)),
+        frame_from_radio(&config_complete(9999)),
     ]));
     let boxed: BoxedTransport = Box::pin(transport);
     handle.close();

@@ -1,4 +1,4 @@
-#![allow(clippy::expect_used, clippy::unwrap_used, clippy::panic, clippy::pedantic, clippy::nursery, clippy::cargo, clippy::indexing_slicing, clippy::integer_division, clippy::collapsible_if, clippy::byte_char_slices, clippy::redundant_pattern_matching)]
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use mt::codec::error::{FrameError, MAX_FRAME_PAYLOAD};
 use mt::codec::frame::{decode, encode};
@@ -13,8 +13,8 @@ fn encodes_empty_payload_as_header_only() {
 fn encodes_payload_with_big_endian_length() {
     let payload = vec![1u8, 2, 3, 4, 5];
     let out = encode(&payload).expect("encode");
-    assert_eq!(out[..4], [0x94, 0xC3, 0x00, 0x05]);
-    assert_eq!(&out[4..], &payload[..]);
+    assert_eq!(out.get(..4), Some([0x94, 0xC3, 0x00, 0x05].as_slice()));
+    assert_eq!(out.get(4..), Some(payload.as_slice()));
 }
 
 #[test]

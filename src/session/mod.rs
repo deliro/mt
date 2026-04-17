@@ -71,33 +71,62 @@ impl DeviceSession {
     }
 }
 
-#[allow(clippy::cognitive_complexity, clippy::too_many_lines)]
+enum LoopStep {
+    Continue,
+    Disconnect,
+    Error(String),
+    Channel,
+}
+
 async fn run_connection(
     connect: &Connector,
     profile: ConnectionProfile,
     rx: &mut mpsc::UnboundedReceiver<Command>,
     tx: &mpsc::Sender<Event>,
 ) {
-    let _ = tx.send(Event::Connecting).await;
-    let (transport, kind) = match (connect)(profile).await {
-        Ok(pair) => pair,
-        Err(e) => {
-            let _ = tx.send(Event::Error(e.to_string())).await;
-            let _ = tx.send(Event::Disconnected).await;
-            return;
-        }
-    };
-    let config_id = ConfigId::random();
-    let (snapshot, transport) = match run_handshake(transport, kind, config_id).await {
-        Ok(pair) => pair,
-        Err(e) => {
-            let _ = tx.send(Event::Error(e.to_string())).await;
-            let _ = tx.send(Event::Disconnected).await;
-            return;
-        }
-    };
+    let Some((transport, kind)) = open_transport(connect, profile, tx).await else { return };
+    let Some((snapshot, transport)) = handshake_or_fail(transport, kind, tx).await else { return };
     let _ = tx.send(Event::Connected(Box::new(snapshot))).await;
+    run_ready_loop(transport, rx, tx).await;
+}
 
+async fn open_transport(
+    connect: &Connector,
+    profile: ConnectionProfile,
+    tx: &mpsc::Sender<Event>,
+) -> Option<(BoxedTransport, TransportKind)> {
+    let _ = tx.send(Event::Connecting).await;
+    match (connect)(profile).await {
+        Ok(pair) => Some(pair),
+        Err(e) => {
+            let _ = tx.send(Event::Error(e.to_string())).await;
+            let _ = tx.send(Event::Disconnected).await;
+            None
+        }
+    }
+}
+
+async fn handshake_or_fail(
+    transport: BoxedTransport,
+    kind: TransportKind,
+    tx: &mpsc::Sender<Event>,
+) -> Option<(DeviceSnapshot, BoxedTransport)> {
+    let config_id = ConfigId::random();
+    match run_handshake(transport, kind, config_id).await {
+        Ok(pair) => Some(pair),
+        Err(e) => {
+            let _ = tx.send(Event::Error(e.to_string())).await;
+            let _ = tx.send(Event::Disconnected).await;
+            None
+        }
+    }
+}
+
+async fn run_ready_loop(
+    transport: BoxedTransport,
+    rx: &mut mpsc::UnboundedReceiver<Command>,
+    tx: &mpsc::Sender<Event>,
+) {
     let (sink, stream) = transport.split();
     let mut sink: Pin<Box<_>> = Box::pin(sink);
     let mut stream: Pin<Box<_>> = Box::pin(stream);
@@ -107,77 +136,97 @@ async fn run_connection(
     let _ = heartbeat.tick().await;
 
     loop {
-        tokio::select! {
-            cmd = rx.recv() => {
-                let Some(cmd) = cmd else { break };
-                match cmd {
-                    Command::Connect(_) => {
-                        warn!("ignoring Connect while already connected");
-                    }
-                    Command::Disconnect => {
-                        let _ = tx.send(Event::Disconnected).await;
-                        return;
-                    }
-                    Command::SendText { channel, to, text, want_ack } => {
-                        match send_text(&mut sink, channel, to, &text, want_ack).await {
-                            Ok(id) => {
-                                let _ = tx.send(Event::MessageReceived(TextMessage {
-                                    id,
-                                    channel,
-                                    from: NodeId(0),
-                                    to,
-                                    text,
-                                    received_at: SystemTime::now(),
-                                    direction: Direction::Outgoing,
-                                    state: DeliveryState::Pending,
-                                })).await;
-                                spawn_ack_timeout(tx.clone(), id);
-                            }
-                            Err(e) => {
-                                let _ = tx.send(Event::Error(e.to_string())).await;
-                                let _ = tx.send(Event::Disconnected).await;
-                                return;
-                            }
-                        }
-                    }
-                    Command::AckTimeout(id) => {
-                        let _ = tx.send(Event::MessageStateChanged {
-                            id,
-                            state: DeliveryState::Failed("no ack".into()),
-                        }).await;
-                    }
-                }
+        let step = tokio::select! {
+            cmd = rx.recv() => match cmd {
+                Some(c) => handle_command(c, &mut sink, tx).await,
+                None => LoopStep::Channel,
+            },
+            _ = heartbeat.tick() => match send_heartbeat(&mut sink).await {
+                Ok(()) => LoopStep::Continue,
+                Err(e) => LoopStep::Error(e.to_string()),
+            },
+            item = stream.next() => handle_incoming(item, tx).await,
+        };
+        match step {
+            LoopStep::Continue => {}
+            LoopStep::Channel => break,
+            LoopStep::Disconnect => {
+                let _ = tx.send(Event::Disconnected).await;
+                return;
             }
-            _ = heartbeat.tick() => {
-                if let Err(e) = send_heartbeat(&mut sink).await {
-                    let _ = tx.send(Event::Error(e.to_string())).await;
-                    let _ = tx.send(Event::Disconnected).await;
-                    return;
-                }
-            }
-            item = stream.next() => {
-                let Some(item) = item else {
-                    let _ = tx.send(Event::Disconnected).await;
-                    return;
-                };
-                let frame = match item {
-                    Ok(f) => f,
-                    Err(e) => {
-                        let _ = tx.send(Event::Error(e.to_string())).await;
-                        let _ = tx.send(Event::Disconnected).await;
-                        return;
-                    }
-                };
-                let msg = match meshtastic::FromRadio::decode(frame.as_slice()) {
-                    Ok(m) => m,
-                    Err(e) => { warn!(%e, "bad FromRadio"); continue; }
-                };
-                for ev in events_from_radio(msg) {
-                    let _ = tx.send(ev).await;
-                }
+            LoopStep::Error(msg) => {
+                let _ = tx.send(Event::Error(msg)).await;
+                let _ = tx.send(Event::Disconnected).await;
+                return;
             }
         }
     }
+}
+
+async fn handle_command(
+    cmd: Command,
+    sink: &mut Pin<Box<impl futures::Sink<Vec<u8>, Error = crate::transport::TransportError> + ?Sized>>,
+    tx: &mpsc::Sender<Event>,
+) -> LoopStep {
+    match cmd {
+        Command::Connect(_) => {
+            warn!("ignoring Connect while already connected");
+            LoopStep::Continue
+        }
+        Command::Disconnect => LoopStep::Disconnect,
+        Command::SendText { channel, to, text, want_ack } => {
+            match send_text(sink, channel, to, &text, want_ack).await {
+                Ok(id) => {
+                    let _ = tx
+                        .send(Event::MessageReceived(TextMessage {
+                            id,
+                            channel,
+                            from: NodeId(0),
+                            to,
+                            text,
+                            received_at: SystemTime::now(),
+                            direction: Direction::Outgoing,
+                            state: DeliveryState::Pending,
+                        }))
+                        .await;
+                    spawn_ack_timeout(tx.clone(), id);
+                    LoopStep::Continue
+                }
+                Err(e) => LoopStep::Error(e.to_string()),
+            }
+        }
+        Command::AckTimeout(id) => {
+            let _ = tx
+                .send(Event::MessageStateChanged {
+                    id,
+                    state: DeliveryState::Failed("no ack".into()),
+                })
+                .await;
+            LoopStep::Continue
+        }
+    }
+}
+
+async fn handle_incoming(
+    item: Option<Result<Vec<u8>, crate::transport::TransportError>>,
+    tx: &mpsc::Sender<Event>,
+) -> LoopStep {
+    let Some(item) = item else { return LoopStep::Disconnect };
+    let frame = match item {
+        Ok(f) => f,
+        Err(e) => return LoopStep::Error(e.to_string()),
+    };
+    let msg = match meshtastic::FromRadio::decode(frame.as_slice()) {
+        Ok(m) => m,
+        Err(e) => {
+            warn!(%e, "bad FromRadio");
+            return LoopStep::Continue;
+        }
+    };
+    for ev in events_from_radio(msg) {
+        let _ = tx.send(ev).await;
+    }
+    LoopStep::Continue
 }
 
 async fn send_text(
