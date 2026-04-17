@@ -1,4 +1,5 @@
 pub mod error;
+pub mod mock;
 
 use std::pin::Pin;
 
