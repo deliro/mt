@@ -97,10 +97,16 @@ fn apply_handshake(mut acc: HandshakeAcc, event: HandshakeFragment) -> SessionSt
             let Some(my_node) = acc.my_node else {
                 return SessionState::Handshake(acc);
             };
+            let (short_name, long_name) = match acc.nodes.get(&my_node) {
+                Some(n) if !n.short_name.is_empty() || !n.long_name.is_empty() => {
+                    (n.short_name.clone(), n.long_name.clone())
+                }
+                _ => (acc.short_name, acc.long_name),
+            };
             SessionState::Ready(DeviceSnapshot {
                 my_node,
-                short_name: acc.short_name,
-                long_name: acc.long_name,
+                short_name,
+                long_name,
                 firmware_version: acc.firmware,
                 nodes: acc.nodes,
                 channels: acc.channels,
