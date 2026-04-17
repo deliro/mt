@@ -1,5 +1,6 @@
 pub mod error;
 pub mod mock;
+pub mod serial;
 pub mod tcp;
 
 use std::pin::Pin;
