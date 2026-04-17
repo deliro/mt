@@ -1,0 +1,41 @@
+[package]
+name = "mt"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "mt"
+path = "src/main.rs"
+
+[dependencies]
+bytes = "1"
+directories = "5"
+eframe = { version = "0.29", default-features = false, features = ["default_fonts", "glow", "wayland", "x11"] }
+egui = "0.29"
+egui_extras = "0.29"
+futures = "0.3"
+prost = "0.13"
+rand = "0.8"
+serde = { version = "1", features = ["derive"] }
+thiserror = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "io-util", "net", "fs"] }
+tokio-util = { version = "0.7", features = ["codec"] }
+toml = "0.8"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+uuid = { version = "1", features = ["v4"] }
+
+btleplug = "0.11"
+tokio-serial = "5"
+
+[build-dependencies]
+prost-build = "0.13"
+protoc-bin-vendored = "3"
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "io-util", "net", "test-util"] }
