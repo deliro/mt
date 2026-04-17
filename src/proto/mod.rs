@@ -6,3 +6,5 @@
 pub mod meshtastic {
     include!(concat!(env!("OUT_DIR"), "/meshtastic.rs"));
 }
+
+pub mod port;
