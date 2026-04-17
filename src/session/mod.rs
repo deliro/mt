@@ -71,6 +71,7 @@ impl DeviceSession {
     }
 }
 
+#[allow(clippy::cognitive_complexity, clippy::too_many_lines)]
 async fn run_connection(
     connect: &Connector,
     profile: ConnectionProfile,
@@ -248,7 +249,7 @@ fn events_from_radio(msg: meshtastic::FromRadio) -> Vec<Event> {
     let Some(variant) = msg.payload_variant else { return Vec::new() };
     match variant {
         PayloadVariant::Packet(packet) => packet_to_events(packet),
-        PayloadVariant::NodeInfo(ni) => vec![Event::NodeUpdated(node_from_proto(ni))],
+        PayloadVariant::NodeInfo(ni) => vec![Event::NodeUpdated(node_from_proto(&ni))],
         PayloadVariant::Channel(ch) => channel_to_events(ch),
         PayloadVariant::MyInfo(_)
         | PayloadVariant::Config(_)
@@ -294,8 +295,10 @@ fn packet_to_events(p: meshtastic::MeshPacket) -> Vec<Event> {
                 Some(meshtastic::routing::Variant::ErrorReason(code)) => {
                     DeliveryState::Failed(format!("routing error {code}"))
                 }
-                Some(meshtastic::routing::Variant::RouteRequest(_))
-                | Some(meshtastic::routing::Variant::RouteReply(_))
+                Some(
+                    meshtastic::routing::Variant::RouteRequest(_)
+                    | meshtastic::routing::Variant::RouteReply(_),
+                )
                 | None => return Vec::new(),
             };
             vec![Event::MessageStateChanged { id, state }]
@@ -308,14 +311,14 @@ fn packet_to_events(p: meshtastic::MeshPacket) -> Vec<Event> {
     }
 }
 
-fn node_from_proto(ni: meshtastic::NodeInfo) -> Node {
+fn node_from_proto(ni: &meshtastic::NodeInfo) -> Node {
     Node {
         id: NodeId(ni.num),
         long_name: ni.user.as_ref().map(|u| u.long_name.clone()).unwrap_or_default(),
         short_name: ni.user.as_ref().map(|u| u.short_name.clone()).unwrap_or_default(),
         role: NodeRole::Client,
         battery_level: ni.device_metrics.as_ref().map(|m| m.battery_level() as u8),
-        voltage_v: ni.device_metrics.as_ref().map(|m| m.voltage()),
+        voltage_v: ni.device_metrics.as_ref().map(meshtastic::DeviceMetrics::voltage),
         snr_db: Some(ni.snr),
         rssi_dbm: None,
         hops_away: Some(ni.hops_away() as u8),

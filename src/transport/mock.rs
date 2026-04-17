@@ -1,8 +1,9 @@
 use std::pin::Pin;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use futures::{Sink, Stream};
+use parking_lot::Mutex;
 use tokio::sync::mpsc;
 
 use crate::transport::TransportError;
@@ -30,7 +31,7 @@ pub struct MockHandle {
 
 impl MockHandle {
     pub fn captured(&self) -> Vec<Vec<u8>> {
-        self.captured.lock().expect("mock capture lock").clone()
+        self.captured.lock().clone()
     }
 
     pub fn inject(&self, frame: Vec<u8>) {
@@ -70,7 +71,7 @@ impl Sink<Vec<u8>> for MockTransport {
     }
 
     fn start_send(self: Pin<&mut Self>, item: Vec<u8>) -> Result<(), Self::Error> {
-        self.captured.lock().expect("mock capture lock").push(item);
+        self.captured.lock().push(item);
         Ok(())
     }
 

@@ -18,10 +18,11 @@ impl PartialEq for FrameError {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::BadMagic(a1, b1), Self::BadMagic(a2, b2)) => a1 == a2 && b1 == b2,
-            (Self::TooLarge(a), Self::TooLarge(b)) => a == b,
-            (Self::NeedMore(a), Self::NeedMore(b)) => a == b,
+            (Self::TooLarge(a), Self::TooLarge(b)) | (Self::NeedMore(a), Self::NeedMore(b)) => {
+                a == b
+            }
             (Self::Io(a), Self::Io(b)) => a.kind() == b.kind(),
-            _ => false,
+            (Self::BadMagic(..) | Self::TooLarge(_) | Self::NeedMore(_) | Self::Io(_), _) => false,
         }
     }
 }

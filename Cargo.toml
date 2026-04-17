@@ -4,6 +4,43 @@ version = "0.1.0"
 edition = "2024"
 publish = false
 
+[lints.rust]
+unsafe_code = "deny"
+rust_2018_idioms = { level = "warn", priority = -1 }
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+cargo = { level = "warn", priority = -1 }
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+todo = "deny"
+unimplemented = "deny"
+dbg_macro = "deny"
+print_stdout = "deny"
+print_stderr = "deny"
+indexing_slicing = "deny"
+integer_division = "deny"
+arithmetic_side_effects = "warn"
+float_cmp = "deny"
+string_slice = "deny"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+module_name_repetitions = "allow"
+module_inception = "allow"
+missing_const_for_fn = "allow"
+must_use_candidate = "allow"
+cast_precision_loss = "allow"
+cast_possible_truncation = "allow"
+cast_possible_wrap = "allow"
+cast_sign_loss = "allow"
+cast_lossless = "allow"
+multiple_crate_versions = "allow"
+negative_feature_names = "allow"
+cargo_common_metadata = "allow"
+
 [lib]
 path = "src/lib.rs"
 
@@ -18,6 +55,7 @@ eframe = { version = "0.29", default-features = false, features = ["default_font
 egui = "0.29"
 egui_extras = "0.29"
 futures = "0.3"
+parking_lot = "0.12"
 prost = "0.13"
 rand = "0.8"
 serde = { version = "1", features = ["derive"] }

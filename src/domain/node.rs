@@ -2,7 +2,7 @@ use std::time::SystemTime;
 
 use crate::domain::ids::NodeId;
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum NodeRole {
     Client,
     ClientMute,

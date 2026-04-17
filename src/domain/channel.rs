@@ -7,7 +7,7 @@ pub enum ChannelRole {
     Disabled,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Channel {
     pub index: ChannelIndex,
     pub role: ChannelRole,

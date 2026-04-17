@@ -8,7 +8,7 @@ use crate::codec::frame::FrameCodec;
 use crate::error::ConnectError;
 use crate::transport::{BoxedTransport, TransportError};
 
-pub async fn connect(path: &Path) -> Result<BoxedTransport, ConnectError> {
+pub fn connect(path: &Path) -> Result<BoxedTransport, ConnectError> {
     let path_str = path.to_string_lossy();
     let stream: SerialStream = tokio_serial::new(path_str.as_ref(), 115_200)
         .data_bits(DataBits::Eight)

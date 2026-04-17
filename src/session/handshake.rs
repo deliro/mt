@@ -71,7 +71,7 @@ fn fragments_from_radio(msg: meshtastic::FromRadio) -> Vec<HandshakeFragment> {
             long: String::new(),
             firmware: String::new(),
         }],
-        PayloadVariant::NodeInfo(ni) => vec![HandshakeFragment::Node(node_from_proto(ni))],
+        PayloadVariant::NodeInfo(ni) => vec![HandshakeFragment::Node(node_from_proto(&ni))],
         PayloadVariant::Channel(ch) => channel_fragments(ch),
         PayloadVariant::Metadata(meta) => vec![HandshakeFragment::MyNode {
             id: NodeId(0),
@@ -96,14 +96,14 @@ fn fragments_from_radio(msg: meshtastic::FromRadio) -> Vec<HandshakeFragment> {
     }
 }
 
-fn node_from_proto(ni: meshtastic::NodeInfo) -> Node {
+fn node_from_proto(ni: &meshtastic::NodeInfo) -> Node {
     Node {
         id: NodeId(ni.num),
         long_name: ni.user.as_ref().map(|u| u.long_name.clone()).unwrap_or_default(),
         short_name: ni.user.as_ref().map(|u| u.short_name.clone()).unwrap_or_default(),
         role: NodeRole::Client,
         battery_level: ni.device_metrics.as_ref().map(|m| m.battery_level() as u8),
-        voltage_v: ni.device_metrics.as_ref().map(|m| m.voltage()),
+        voltage_v: ni.device_metrics.as_ref().map(meshtastic::DeviceMetrics::voltage),
         snr_db: Some(ni.snr),
         rssi_dbm: None,
         hops_away: Some(ni.hops_away() as u8),

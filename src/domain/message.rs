@@ -21,7 +21,7 @@ pub enum DeliveryState {
     Failed(String),
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TextMessage {
     pub id: PacketId,
     pub channel: ChannelIndex,

@@ -144,7 +144,7 @@ fn apply_ready(mut snap: DeviceSnapshot, event: HandshakeFragment) -> SessionSta
         }
         HandshakeFragment::NodeMetric { id, update } => {
             if let Some(node) = snap.nodes.get_mut(&id) {
-                apply_metric(node, update);
+                apply_metric(node, &update);
             }
             SessionState::Ready(snap)
         }
@@ -158,8 +158,8 @@ fn upsert_channel(channels: &mut Vec<Channel>, channel: Channel) {
     }
 }
 
-fn apply_metric(node: &mut Node, metric: NodeMetric) {
-    match metric {
+fn apply_metric(node: &mut Node, metric: &NodeMetric) {
+    match *metric {
         NodeMetric::Battery(b) => node.battery_level = Some(b),
         NodeMetric::Voltage(v) => node.voltage_v = Some(v),
         NodeMetric::Snr(s) => node.snr_db = Some(s),

@@ -1787,6 +1787,7 @@ dependencies = [
  "egui",
  "egui_extras",
  "futures",
+ "parking_lot",
  "prost",
  "prost-build",
  "protoc-bin-vendored",

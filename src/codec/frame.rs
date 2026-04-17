@@ -12,38 +12,39 @@ pub fn encode(payload: &[u8]) -> Result<Vec<u8>, FrameError> {
     if payload.len() > MAX_FRAME_PAYLOAD {
         return Err(FrameError::TooLarge(payload.len()));
     }
-    let mut out = Vec::with_capacity(HEADER_LEN + payload.len());
+    let mut out = Vec::with_capacity(HEADER_LEN.saturating_add(payload.len()));
     out.extend_from_slice(&MAGIC);
-    out.extend_from_slice(&(payload.len() as u16).to_be_bytes());
+    let len_u16 = u16::try_from(payload.len()).unwrap_or(u16::MAX);
+    out.extend_from_slice(&len_u16.to_be_bytes());
     out.extend_from_slice(payload);
     Ok(out)
 }
 
 pub fn decode(bytes: &[u8]) -> Result<(Vec<u8>, usize), FrameError> {
-    if bytes.is_empty() {
-        return Err(FrameError::NeedMore(HEADER_LEN));
+    let Some(header) = bytes.get(..HEADER_LEN) else {
+        if let (Some(&b0), Some(&b1)) = (bytes.first(), bytes.get(1))
+            && (b0 != MAGIC[0] || b1 != MAGIC[1])
+        {
+            return Err(FrameError::BadMagic(b0, b1));
+        }
+        return Err(FrameError::NeedMore(HEADER_LEN.saturating_sub(bytes.len())));
+    };
+    let b0 = header.first().copied().unwrap_or(0);
+    let b1 = header.get(1).copied().unwrap_or(0);
+    if b0 != MAGIC[0] || b1 != MAGIC[1] {
+        return Err(FrameError::BadMagic(b0, b1));
     }
-    if bytes[0] != MAGIC[0] {
-        return Err(FrameError::BadMagic(bytes[0], bytes.get(1).copied().unwrap_or(0)));
-    }
-    if bytes.len() < 2 {
-        return Err(FrameError::NeedMore(HEADER_LEN - bytes.len()));
-    }
-    if bytes[1] != MAGIC[1] {
-        return Err(FrameError::BadMagic(bytes[0], bytes[1]));
-    }
-    if bytes.len() < HEADER_LEN {
-        return Err(FrameError::NeedMore(HEADER_LEN - bytes.len()));
-    }
-    let len = u16::from_be_bytes([bytes[2], bytes[3]]) as usize;
+    let len_hi = header.get(2).copied().unwrap_or(0);
+    let len_lo = header.get(3).copied().unwrap_or(0);
+    let len = u16::from_be_bytes([len_hi, len_lo]) as usize;
     if len > MAX_FRAME_PAYLOAD {
         return Err(FrameError::TooLarge(len));
     }
-    let total = HEADER_LEN + len;
-    if bytes.len() < total {
-        return Err(FrameError::NeedMore(total - bytes.len()));
-    }
-    Ok((bytes[HEADER_LEN..total].to_vec(), total))
+    let total = HEADER_LEN.saturating_add(len);
+    let Some(body) = bytes.get(HEADER_LEN..total) else {
+        return Err(FrameError::NeedMore(total.saturating_sub(bytes.len())));
+    };
+    Ok((body.to_vec(), total))
 }
 
 #[derive(Default)]
@@ -54,24 +55,26 @@ impl Decoder for FrameCodec {
     type Error = FrameError;
 
     fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
-        while !src.is_empty() && src[0] != MAGIC[0] {
+        while src.first().is_some_and(|&b| b != MAGIC[0]) {
             let _ = src.split_to(1);
         }
         if src.len() < 2 {
             return Ok(None);
         }
-        if src[1] != MAGIC[1] {
+        if src.get(1).copied() != Some(MAGIC[1]) {
             let _ = src.split_to(1);
             return self.decode(src);
         }
         if src.len() < HEADER_LEN {
             return Ok(None);
         }
-        let len = u16::from_be_bytes([src[2], src[3]]) as usize;
+        let len_hi = src.get(2).copied().unwrap_or(0);
+        let len_lo = src.get(3).copied().unwrap_or(0);
+        let len = u16::from_be_bytes([len_hi, len_lo]) as usize;
         if len > MAX_FRAME_PAYLOAD {
             return Err(FrameError::TooLarge(len));
         }
-        let total = HEADER_LEN + len;
+        let total = HEADER_LEN.saturating_add(len);
         if src.len() < total {
             return Ok(None);
         }
@@ -88,9 +91,10 @@ impl Encoder<Vec<u8>> for FrameCodec {
         if item.len() > MAX_FRAME_PAYLOAD {
             return Err(FrameError::TooLarge(item.len()));
         }
-        dst.reserve(HEADER_LEN + item.len());
+        dst.reserve(HEADER_LEN.saturating_add(item.len()));
         dst.extend_from_slice(&MAGIC);
-        dst.extend_from_slice(&(item.len() as u16).to_be_bytes());
+        let len_u16 = u16::try_from(item.len()).unwrap_or(u16::MAX);
+        dst.extend_from_slice(&len_u16.to_be_bytes());
         dst.extend_from_slice(&item);
         Ok(())
     }
