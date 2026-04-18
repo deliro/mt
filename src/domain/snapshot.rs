@@ -8,6 +8,7 @@ use crate::domain::config::{
 use crate::domain::ids::NodeId;
 use crate::domain::message::TextMessage;
 use crate::domain::node::Node;
+use crate::domain::stats::MeshStats;
 
 #[derive(Clone, Debug, Default)]
 pub struct DeviceSnapshot {
@@ -25,6 +26,7 @@ pub struct DeviceSnapshot {
     pub network: Option<NetworkSettings>,
     pub display: Option<DisplaySettings>,
     pub bluetooth: Option<BluetoothSettings>,
+    pub stats: MeshStats,
 }
 
 impl DeviceSnapshot {

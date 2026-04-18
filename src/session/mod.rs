@@ -18,6 +18,7 @@ use crate::domain::node::Node;
 use crate::domain::profile::{ConnectionProfile, TransportKind};
 use crate::domain::session::HandshakeFragment;
 use crate::domain::snapshot::DeviceSnapshot;
+use crate::domain::stats::MeshStats;
 use crate::error::ConnectError;
 use crate::proto::meshtastic;
 use crate::proto::port::{PortPayload, parse};
@@ -42,6 +43,7 @@ pub enum Event {
     NetworkUpdated(crate::domain::config::NetworkSettings),
     DisplayUpdated(crate::domain::config::DisplaySettings),
     BluetoothUpdated(crate::domain::config::BluetoothSettings),
+    StatsUpdated(MeshStats),
     MessageReceived(TextMessage),
     MessageStateChanged { id: PacketId, state: DeliveryState },
     Disconnected,
@@ -275,6 +277,7 @@ impl InitAcc {
             position: self.position,
             power: self.power,
             network: self.network,
+            stats: crate::domain::stats::MeshStats::default(),
             display: self.display,
             bluetooth: self.bluetooth,
         }
@@ -305,7 +308,7 @@ async fn run_ready_loop(
                 Ok(()) => LoopStep::Continue,
                 Err(e) => LoopStep::Error(e.to_string()),
             },
-            item = stream.next() => handle_incoming(item, tx, &mut pending).await,
+            item = stream.next() => handle_incoming(item, my_node, tx, &mut pending).await,
         };
         match step {
             LoopStep::Continue => {}
@@ -649,6 +652,7 @@ async fn send_admin(
 
 async fn handle_incoming(
     item: Option<Result<Vec<u8>, crate::transport::TransportError>>,
+    my_node: NodeId,
     tx: &mpsc::Sender<Event>,
     pending: &mut std::collections::HashSet<PacketId>,
 ) -> LoopStep {
@@ -664,7 +668,7 @@ async fn handle_incoming(
             return LoopStep::Continue;
         }
     };
-    for outcome in incoming_outcomes(msg) {
+    for outcome in incoming_outcomes(msg, my_node) {
         match outcome {
             IncomingOutcome::Event(ev) => {
                 let _ = tx.send(ev).await;
@@ -771,14 +775,12 @@ async fn emit_error_and_disconnect(tx: &mpsc::Sender<Event>, msg: &str) {
     let _ = tx.send(Event::Disconnected).await;
 }
 
-fn incoming_outcomes(msg: meshtastic::FromRadio) -> Vec<IncomingOutcome> {
+fn incoming_outcomes(msg: meshtastic::FromRadio, my_node: NodeId) -> Vec<IncomingOutcome> {
     use meshtastic::from_radio::PayloadVariant;
     let Some(variant) = msg.payload_variant else { return Vec::new() };
     match variant {
-        PayloadVariant::Packet(packet) => packet_outcomes(packet),
-        PayloadVariant::NodeInfo(ni) => {
-            vec![IncomingOutcome::Event(Event::NodeUpdated(node_from_proto(&ni)))]
-        }
+        PayloadVariant::Packet(packet) => packet_outcomes(packet, my_node),
+        PayloadVariant::NodeInfo(ni) => node_info_outcomes(&ni, my_node),
         PayloadVariant::Channel(ch) => channel_to_events(ch)
             .into_iter()
             .map(IncomingOutcome::Event)
@@ -840,13 +842,31 @@ fn config_to_events(cfg: meshtastic::Config) -> Vec<IncomingOutcome> {
     }
 }
 
-fn packet_outcomes(p: meshtastic::MeshPacket) -> Vec<IncomingOutcome> {
+fn node_info_outcomes(ni: &meshtastic::NodeInfo, my_node: NodeId) -> Vec<IncomingOutcome> {
+    let mut out = vec![IncomingOutcome::Event(Event::NodeUpdated(node_from_proto(ni)))];
+    if NodeId(ni.num) == my_node
+        && let Some(metrics) = ni.device_metrics.as_ref()
+    {
+        out.push(IncomingOutcome::Event(Event::StatsUpdated(stats_from_device_metrics(metrics))));
+    }
+    out
+}
+
+fn packet_outcomes(p: meshtastic::MeshPacket, my_node: NodeId) -> Vec<IncomingOutcome> {
     use meshtastic::mesh_packet::PayloadVariant;
     let Some(PayloadVariant::Decoded(data)) = p.payload_variant else { return Vec::new() };
     let request_id = data.request_id;
     let Ok(payload) = parse(data.portnum, &data.payload) else { return Vec::new() };
     let channel = ChannelIndex::new(p.channel as u8).unwrap_or_else(ChannelIndex::primary);
+    let from_self = NodeId(p.from) == my_node;
     match payload {
+        PortPayload::Telemetry(t) => {
+            if from_self {
+                telemetry_outcomes(t)
+            } else {
+                Vec::new()
+            }
+        }
         PortPayload::Text(text) => vec![IncomingOutcome::Event(Event::MessageReceived(TextMessage {
             id: PacketId(p.id),
             channel,
@@ -878,9 +898,51 @@ fn packet_outcomes(p: meshtastic::MeshPacket) -> Vec<IncomingOutcome> {
         }
         PortPayload::Position(_)
         | PortPayload::NodeInfo(_)
-        | PortPayload::Telemetry(_)
         | PortPayload::Admin(_)
         | PortPayload::Unknown { .. } => Vec::new(),
+    }
+}
+
+fn telemetry_outcomes(t: meshtastic::Telemetry) -> Vec<IncomingOutcome> {
+    use meshtastic::telemetry::Variant;
+    let Some(variant) = t.variant else { return Vec::new() };
+    match variant {
+        Variant::DeviceMetrics(m) => {
+            vec![IncomingOutcome::Event(Event::StatsUpdated(stats_from_device_metrics(&m)))]
+        }
+        Variant::LocalStats(s) => {
+            vec![IncomingOutcome::Event(Event::StatsUpdated(stats_from_local_stats(&s)))]
+        }
+        Variant::EnvironmentMetrics(_)
+        | Variant::AirQualityMetrics(_)
+        | Variant::PowerMetrics(_)
+        | Variant::HealthMetrics(_)
+        | Variant::HostMetrics(_)
+        | Variant::TrafficManagementStats(_) => Vec::new(),
+    }
+}
+
+fn stats_from_device_metrics(m: &meshtastic::DeviceMetrics) -> MeshStats {
+    MeshStats {
+        battery_level: m.battery_level.and_then(|v| u8::try_from(v).ok()),
+        voltage_v: m.voltage,
+        channel_utilization: m.channel_utilization,
+        air_util_tx: m.air_util_tx,
+        uptime_seconds: m.uptime_seconds,
+        ..MeshStats::default()
+    }
+}
+
+fn stats_from_local_stats(s: &meshtastic::LocalStats) -> MeshStats {
+    MeshStats {
+        uptime_seconds: Some(s.uptime_seconds),
+        channel_utilization: Some(s.channel_utilization),
+        air_util_tx: Some(s.air_util_tx),
+        num_packets_tx: Some(s.num_packets_tx),
+        num_packets_rx: Some(s.num_packets_rx),
+        num_tx_relay: Some(s.num_tx_relay),
+        num_online_nodes: Some(s.num_online_nodes),
+        ..MeshStats::default()
     }
 }
 

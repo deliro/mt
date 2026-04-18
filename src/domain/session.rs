@@ -169,6 +169,7 @@ fn apply_handshake(mut acc: HandshakeAcc, event: HandshakeFragment) -> SessionSt
                 network: acc.network,
                 display: acc.display,
                 bluetooth: acc.bluetooth,
+                stats: crate::domain::stats::MeshStats::default(),
             })
         }
         HandshakeFragment::Message(_)

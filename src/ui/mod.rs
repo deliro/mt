@@ -111,6 +111,7 @@ impl App {
             Event::NetworkUpdated(s) => self.state.snapshot.network = Some(s),
             Event::DisplayUpdated(s) => self.state.snapshot.display = Some(s),
             Event::BluetoothUpdated(s) => self.state.snapshot.bluetooth = Some(s),
+            Event::StatsUpdated(stats) => self.state.snapshot.stats.merge(&stats),
             Event::MessageReceived(m) => self.apply_message_received(m),
             Event::MessageStateChanged { id, state } => self.apply_state_changed(id, &state),
             Event::Disconnected => {
@@ -264,6 +265,7 @@ const fn is_activity(ev: &Event) -> bool {
             | Event::NetworkUpdated(_)
             | Event::DisplayUpdated(_)
             | Event::BluetoothUpdated(_)
+            | Event::StatsUpdated(_)
             | Event::MessageReceived(_)
             | Event::MessageStateChanged { .. }
     )
