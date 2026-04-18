@@ -3,6 +3,7 @@ use std::time::SystemTime;
 use eframe::egui;
 use tokio::sync::mpsc;
 
+use crate::domain::channel::ChannelRole;
 use crate::domain::ids::{ChannelIndex, NodeId};
 use crate::domain::message::{DeliveryState, Direction, Recipient};
 use crate::session::commands::Command;
@@ -28,18 +29,40 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState, cmd: &mpsc::UnboundedSend
 }
 
 fn channel_tabs(ui: &mut egui::Ui, state: &mut AppState) {
+    let usable: Vec<(u8, String)> = state
+        .snapshot
+        .channels
+        .iter()
+        .filter(|c| c.role != ChannelRole::Disabled)
+        .map(|c| (c.index.get(), channel_label(c)))
+        .collect();
+
+    if let Some((first, _)) = usable.first()
+        && !usable.iter().any(|(idx, _)| *idx == state.chat_ui.active_channel)
+    {
+        state.chat_ui.active_channel = *first;
+    }
+
     ui.horizontal(|ui| {
-        let channels = state.snapshot.channels.clone();
-        if channels.is_empty() {
-            ui.selectable_value(&mut state.chat_ui.active_channel, 0, "#0");
+        if usable.is_empty() {
+            ui.weak("no channels yet…");
             return;
         }
-        for ch in &channels {
-            let idx = ch.index.get();
-            let label = if ch.name.is_empty() { format!("#{idx}") } else { ch.name.clone() };
-            ui.selectable_value(&mut state.chat_ui.active_channel, idx, label);
+        for (idx, label) in &usable {
+            ui.selectable_value(&mut state.chat_ui.active_channel, *idx, label);
         }
     });
+}
+
+fn channel_label(ch: &crate::domain::channel::Channel) -> String {
+    if !ch.name.is_empty() {
+        return ch.name.clone();
+    }
+    match ch.role {
+        ChannelRole::Primary => "Primary".into(),
+        ChannelRole::Secondary => format!("#{}", ch.index.get()),
+        ChannelRole::Disabled => format!("#{} (off)", ch.index.get()),
+    }
 }
 
 fn message_list(ui: &mut egui::Ui, state: &AppState, active: ChannelIndex) {

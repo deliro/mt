@@ -32,6 +32,7 @@ pub struct AppState {
     pub connect_ui: connect::ConnectUi,
     pub scan_ui: scan::ScanUi,
     pub chat_ui: chat::ChatUi,
+    pub nodes_ui: nodes::NodesUi,
 }
 
 impl AppState {
@@ -139,10 +140,19 @@ impl eframe::App for App {
             ui.selectable_value(&mut self.state.active_tab, Tab::Chat, "Chat");
             ui.selectable_value(&mut self.state.active_tab, Tab::Nodes, "Nodes");
         });
-        egui::CentralPanel::default().show(ctx, |ui| match self.state.active_tab {
-            Tab::Chat => chat::render(ui, &mut self.state, &self.cmd_tx),
-            Tab::Nodes => nodes::render(ui, &self.state),
-        });
+        match self.state.active_tab {
+            Tab::Chat => {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    chat::render(ui, &mut self.state, &self.cmd_tx);
+                });
+            }
+            Tab::Nodes => {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    let AppState { snapshot, nodes_ui, .. } = &mut self.state;
+                    nodes::render(ui, snapshot, nodes_ui);
+                });
+            }
+        }
         ctx.request_repaint_after(std::time::Duration::from_millis(100));
     }
 }

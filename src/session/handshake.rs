@@ -1,3 +1,5 @@
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
 use crate::domain::channel::{Channel, ChannelRole};
 use crate::domain::ids::{ChannelIndex, ConfigId, NodeId};
 use crate::domain::node::{Node, NodeRole, Position};
@@ -32,17 +34,22 @@ pub fn fragments_from_radio(msg: meshtastic::FromRadio) -> Vec<HandshakeFragment
 }
 
 pub fn node_from_proto(ni: &meshtastic::NodeInfo) -> Node {
+    let last_heard = if ni.last_heard == 0 {
+        None
+    } else {
+        UNIX_EPOCH.checked_add(Duration::from_secs(u64::from(ni.last_heard)))
+    };
     Node {
         id: NodeId(ni.num),
         long_name: ni.user.as_ref().map(|u| u.long_name.clone()).unwrap_or_default(),
         short_name: ni.user.as_ref().map(|u| u.short_name.clone()).unwrap_or_default(),
-        role: NodeRole::Client,
+        role: ni.user.as_ref().map_or(NodeRole::Client, |u| role_from_proto(u.role())),
         battery_level: ni.device_metrics.as_ref().map(|m| m.battery_level() as u8),
         voltage_v: ni.device_metrics.as_ref().map(meshtastic::DeviceMetrics::voltage),
         snr_db: Some(ni.snr),
         rssi_dbm: None,
         hops_away: Some(ni.hops_away() as u8),
-        last_heard: None,
+        last_heard,
         position: ni.position.as_ref().map(|p| Position {
             latitude_deg: p.latitude_i() as f64 * 1e-7,
             longitude_deg: p.longitude_i() as f64 * 1e-7,
@@ -50,6 +57,28 @@ pub fn node_from_proto(ni: &meshtastic::NodeInfo) -> Node {
         }),
     }
 }
+
+fn role_from_proto(role: meshtastic::config::device_config::Role) -> NodeRole {
+    use meshtastic::config::device_config::Role;
+    match role {
+        Role::Client => NodeRole::Client,
+        Role::ClientMute => NodeRole::ClientMute,
+        Role::ClientHidden => NodeRole::ClientHidden,
+        Role::ClientBase => NodeRole::ClientBase,
+        Role::Router => NodeRole::Router,
+        Role::RouterClient => NodeRole::RouterClient,
+        Role::RouterLate => NodeRole::RouterLate,
+        Role::Repeater => NodeRole::Repeater,
+        Role::Tracker => NodeRole::Tracker,
+        Role::Sensor => NodeRole::Sensor,
+        Role::Tak => NodeRole::Tak,
+        Role::TakTracker => NodeRole::TakTracker,
+        Role::LostAndFound => NodeRole::LostAndFound,
+    }
+}
+
+#[allow(dead_code)]
+fn _touch_system_time(_: SystemTime) {}
 
 fn channel_fragments(ch: meshtastic::Channel) -> Vec<HandshakeFragment> {
     let Some(index) = ChannelIndex::new(ch.index as u8) else {

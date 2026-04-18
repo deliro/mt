@@ -6,15 +6,17 @@ use crate::domain::ids::NodeId;
 pub enum NodeRole {
     Client,
     ClientMute,
+    ClientHidden,
+    ClientBase,
     Router,
     RouterClient,
+    RouterLate,
     Repeater,
     Tracker,
     Sensor,
     Tak,
     TakTracker,
     LostAndFound,
-    ClientHidden,
     Unknown(i32),
 }
 
