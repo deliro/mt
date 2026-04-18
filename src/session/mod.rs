@@ -86,8 +86,9 @@ async fn run_connection(
 ) {
     let Some((transport, kind)) = open_transport(connect, profile, tx).await else { return };
     let Some((snapshot, transport)) = handshake_or_fail(transport, kind, tx).await else { return };
+    let my_node = snapshot.my_node;
     let _ = tx.send(Event::Connected(Box::new(snapshot))).await;
-    run_ready_loop(transport, rx, tx).await;
+    run_ready_loop(transport, my_node, rx, tx).await;
 }
 
 async fn open_transport(
@@ -124,6 +125,7 @@ async fn handshake_or_fail(
 
 async fn run_ready_loop(
     transport: BoxedTransport,
+    my_node: NodeId,
     rx: &mut mpsc::UnboundedReceiver<Command>,
     tx: &mpsc::Sender<Event>,
 ) {
@@ -138,7 +140,7 @@ async fn run_ready_loop(
     loop {
         let step = tokio::select! {
             cmd = rx.recv() => match cmd {
-                Some(c) => handle_command(c, &mut sink, tx).await,
+                Some(c) => handle_command(c, my_node, &mut sink, tx).await,
                 None => LoopStep::Channel,
             },
             _ = heartbeat.tick() => match send_heartbeat(&mut sink).await {
@@ -165,6 +167,7 @@ async fn run_ready_loop(
 
 async fn handle_command(
     cmd: Command,
+    my_node: NodeId,
     sink: &mut Pin<Box<impl futures::Sink<Vec<u8>, Error = crate::transport::TransportError> + ?Sized>>,
     tx: &mpsc::Sender<Event>,
 ) -> LoopStep {
@@ -181,7 +184,7 @@ async fn handle_command(
                         .send(Event::MessageReceived(TextMessage {
                             id,
                             channel,
-                            from: NodeId(0),
+                            from: my_node,
                             to,
                             text,
                             received_at: SystemTime::now(),
