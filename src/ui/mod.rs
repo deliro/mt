@@ -2,6 +2,7 @@ pub mod channels;
 pub mod chat;
 pub mod connect;
 pub mod details;
+pub mod firmware;
 pub mod fonts;
 pub mod nodes;
 pub mod remote_admin;
@@ -350,6 +351,9 @@ impl eframe::App for App {
         self.drain_events();
 
         egui::TopBottomPanel::top("status").show(ctx, |ui| status::render(ui, &self.state));
+        if self.state.connected() {
+            firmware::render_banner_if_old(ctx, &self.state.snapshot.firmware_version);
+        }
         scan::render(ctx, &mut self.state.scan_ui, &self.cmd_tx, &mut self.state.profiles);
 
         if !self.state.connected() {
