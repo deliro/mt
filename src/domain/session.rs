@@ -35,6 +35,7 @@ pub struct HandshakeAcc {
     pub display: Option<crate::domain::config::DisplaySettings>,
     pub bluetooth: Option<crate::domain::config::BluetoothSettings>,
     pub mqtt: Option<crate::domain::config::MqttSettings>,
+    pub telemetry: Option<crate::domain::config::TelemetrySettings>,
 }
 
 pub fn start_handshake(transport: TransportKind, config_id: ConfigId) -> SessionState {
@@ -55,6 +56,7 @@ pub fn start_handshake(transport: TransportKind, config_id: ConfigId) -> Session
         display: None,
         bluetooth: None,
         mqtt: None,
+        telemetry: None,
     })
 }
 
@@ -72,6 +74,7 @@ pub enum HandshakeFragment {
     Display(crate::domain::config::DisplaySettings),
     Bluetooth(crate::domain::config::BluetoothSettings),
     Mqtt(crate::domain::config::MqttSettings),
+    Telemetry(crate::domain::config::TelemetrySettings),
     ConfigComplete { id: ConfigId },
     Message(TextMessage),
     MessageStateChanged { id: PacketId, state: DeliveryState },
@@ -148,6 +151,10 @@ fn apply_handshake(mut acc: HandshakeAcc, event: HandshakeFragment) -> SessionSt
             acc.mqtt = Some(settings);
             SessionState::Handshake(acc)
         }
+        HandshakeFragment::Telemetry(settings) => {
+            acc.telemetry = Some(settings);
+            SessionState::Handshake(acc)
+        }
         HandshakeFragment::ConfigComplete { id } => {
             if id != acc.config_id {
                 return SessionState::Handshake(acc);
@@ -177,6 +184,7 @@ fn apply_handshake(mut acc: HandshakeAcc, event: HandshakeFragment) -> SessionSt
                 display: acc.display,
                 bluetooth: acc.bluetooth,
                 mqtt: acc.mqtt,
+                telemetry: acc.telemetry,
                 stats: crate::domain::stats::MeshStats::default(),
             })
         }
@@ -221,6 +229,10 @@ fn apply_ready(mut snap: DeviceSnapshot, event: HandshakeFragment) -> SessionSta
         }
         HandshakeFragment::Mqtt(settings) => {
             snap.mqtt = Some(settings);
+            SessionState::Ready(snap)
+        }
+        HandshakeFragment::Telemetry(settings) => {
+            snap.telemetry = Some(settings);
             SessionState::Ready(snap)
         }
         HandshakeFragment::Node(node) => {

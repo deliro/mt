@@ -126,6 +126,7 @@ impl App {
             Event::DisplayUpdated(s) => self.state.snapshot.display = Some(s),
             Event::BluetoothUpdated(s) => self.state.snapshot.bluetooth = Some(s),
             Event::MqttUpdated(s) => self.state.snapshot.mqtt = Some(s),
+            Event::TelemetryCfgUpdated(s) => self.state.snapshot.telemetry = Some(s),
             Event::StatsUpdated(stats) => self.state.snapshot.stats.merge(&stats),
             Event::TracerouteResult(result) => {
                 let target = result.target;
@@ -302,6 +303,7 @@ const fn is_activity(ev: &Event) -> bool {
             | Event::DisplayUpdated(_)
             | Event::BluetoothUpdated(_)
             | Event::MqttUpdated(_)
+            | Event::TelemetryCfgUpdated(_)
             | Event::StatsUpdated(_)
             | Event::TracerouteResult(_)
             | Event::TracerouteFailed { .. }

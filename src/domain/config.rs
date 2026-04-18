@@ -120,6 +120,50 @@ pub struct MqttMapReport {
     pub position_precision: u32,
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct TelemetrySettings {
+    pub device: DeviceMetricsCfg,
+    pub environment: EnvironmentMetricsCfg,
+    pub air_quality: AirQualityMetricsCfg,
+    pub power: PowerMetricsCfg,
+    pub health: HealthMetricsCfg,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct DeviceMetricsCfg {
+    pub enabled: bool,
+    pub update_interval_secs: u32,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct EnvironmentMetricsCfg {
+    pub measurement_enabled: bool,
+    pub screen_enabled: bool,
+    pub display_fahrenheit: bool,
+    pub update_interval_secs: u32,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct AirQualityMetricsCfg {
+    pub measurement_enabled: bool,
+    pub screen_enabled: bool,
+    pub update_interval_secs: u32,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PowerMetricsCfg {
+    pub measurement_enabled: bool,
+    pub screen_enabled: bool,
+    pub update_interval_secs: u32,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct HealthMetricsCfg {
+    pub measurement_enabled: bool,
+    pub screen_enabled: bool,
+    pub update_interval_secs: u32,
+}
+
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 pub enum ScreenOrientation {
     #[default]

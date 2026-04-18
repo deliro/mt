@@ -1,7 +1,7 @@
 use crate::domain::channel::Channel;
 use crate::domain::config::{
     BluetoothSettings, DeviceSettings, DisplaySettings, LoraSettings, MqttSettings,
-    NetworkSettings, PositionSettings, PowerSettings,
+    NetworkSettings, PositionSettings, PowerSettings, TelemetrySettings,
 };
 use crate::domain::ids::{ChannelIndex, PacketId};
 use crate::domain::message::Recipient;
@@ -22,6 +22,7 @@ pub enum Command {
     SetDisplay(DisplaySettings),
     SetBluetooth(BluetoothSettings),
     SetMqtt(MqttSettings),
+    SetTelemetryCfg(TelemetrySettings),
     SetFixedPosition { latitude_deg: f64, longitude_deg: f64, altitude_m: i32 },
     RemoveFixedPosition,
     Admin(AdminAction),

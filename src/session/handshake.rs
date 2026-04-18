@@ -3,7 +3,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use crate::domain::channel::{Channel, ChannelRole};
 use crate::domain::config::{
     BluetoothSettings, DeviceSettings, DisplaySettings, LoraSettings, MqttSettings,
-    NetworkSettings, PositionSettings, PowerSettings,
+    NetworkSettings, PositionSettings, PowerSettings, TelemetrySettings,
 };
 use crate::domain::ids::{BROADCAST_NODE, ChannelIndex, ConfigId, NodeId, PacketId};
 use crate::domain::message::{DeliveryState, Direction, Recipient, TextMessage};
@@ -167,11 +167,13 @@ fn module_config_fragments(cfg: meshtastic::ModuleConfig) -> Vec<HandshakeFragme
     let Some(variant) = cfg.payload_variant else { return Vec::new() };
     match variant {
         PayloadVariant::Mqtt(m) => vec![HandshakeFragment::Mqtt(mqtt_from_proto(&m))],
+        PayloadVariant::Telemetry(t) => {
+            vec![HandshakeFragment::Telemetry(telemetry_from_proto(&t))]
+        }
         PayloadVariant::Serial(_)
         | PayloadVariant::ExternalNotification(_)
         | PayloadVariant::StoreForward(_)
         | PayloadVariant::RangeTest(_)
-        | PayloadVariant::Telemetry(_)
         | PayloadVariant::CannedMessage(_)
         | PayloadVariant::Audio(_)
         | PayloadVariant::RemoteHardware(_)
@@ -182,6 +184,40 @@ fn module_config_fragments(cfg: meshtastic::ModuleConfig) -> Vec<HandshakeFragme
         | PayloadVariant::Statusmessage(_)
         | PayloadVariant::TrafficManagement(_)
         | PayloadVariant::Tak(_) => Vec::new(),
+    }
+}
+
+pub fn telemetry_from_proto(t: &meshtastic::module_config::TelemetryConfig) -> TelemetrySettings {
+    use crate::domain::config::{
+        AirQualityMetricsCfg, DeviceMetricsCfg, EnvironmentMetricsCfg, HealthMetricsCfg,
+        PowerMetricsCfg,
+    };
+    TelemetrySettings {
+        device: DeviceMetricsCfg {
+            enabled: t.device_telemetry_enabled,
+            update_interval_secs: t.device_update_interval,
+        },
+        environment: EnvironmentMetricsCfg {
+            measurement_enabled: t.environment_measurement_enabled,
+            screen_enabled: t.environment_screen_enabled,
+            display_fahrenheit: t.environment_display_fahrenheit,
+            update_interval_secs: t.environment_update_interval,
+        },
+        air_quality: AirQualityMetricsCfg {
+            measurement_enabled: t.air_quality_enabled,
+            screen_enabled: t.air_quality_screen_enabled,
+            update_interval_secs: t.air_quality_interval,
+        },
+        power: PowerMetricsCfg {
+            measurement_enabled: t.power_measurement_enabled,
+            screen_enabled: t.power_screen_enabled,
+            update_interval_secs: t.power_update_interval,
+        },
+        health: HealthMetricsCfg {
+            measurement_enabled: t.health_measurement_enabled,
+            screen_enabled: t.health_screen_enabled,
+            update_interval_secs: t.health_update_interval,
+        },
     }
 }
 

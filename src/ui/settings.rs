@@ -7,9 +7,9 @@ use crate::domain::config::{
     BluetoothSettings, CLOCK_CHOICES, DEVICE_ROLE_CHOICES, DISPLAY_UNITS_CHOICES, DeviceSettings,
     DisplaySettings, GPS_MODE_CHOICES, LoraSettings, MODEM_PRESET_CHOICES, MqttSettings,
     NetworkSettings, ORIENTATION_CHOICES, PAIRING_MODE_CHOICES, PositionSettings, PowerSettings,
-    REBROADCAST_CHOICES, REGION_CHOICES, clock_label, device_role_label, display_units_label,
-    gps_mode_label, modem_preset_label, orientation_label, pairing_mode_label, rebroadcast_label,
-    region_label,
+    REBROADCAST_CHOICES, REGION_CHOICES, TelemetrySettings, clock_label, device_role_label,
+    display_units_label, gps_mode_label, modem_preset_label, orientation_label,
+    pairing_mode_label, rebroadcast_label, region_label,
 };
 use crate::domain::snapshot::DeviceSnapshot;
 use crate::session::commands::{AdminAction, Command};
@@ -25,6 +25,7 @@ pub enum Section {
     Display,
     Bluetooth,
     Mqtt,
+    Telemetry,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -61,6 +62,7 @@ pub struct Draft {
     pub display: DisplaySettings,
     pub bluetooth: BluetoothSettings,
     pub mqtt: MqttSettings,
+    pub telemetry: TelemetrySettings,
 }
 
 #[derive(Default, Clone)]
@@ -102,6 +104,7 @@ fn sections(ui: &mut egui::Ui, s: &mut SettingsUi, cmd: &mpsc::UnboundedSender<C
     collapsible(ui, "Display", |ui| display_section(ui, s, cmd));
     collapsible(ui, "Bluetooth", |ui| bluetooth_section(ui, s, cmd));
     collapsible(ui, "MQTT", |ui| mqtt_section(ui, s, cmd));
+    collapsible(ui, "Telemetry module", |ui| telemetry_section(ui, s, cmd));
     collapsible(ui, "Admin", |ui| admin_section(ui, s));
     collapsible(ui, "Storage", |ui| storage_section(ui, s));
     admin_confirm_modal(ui.ctx(), s, cmd);
@@ -867,6 +870,148 @@ fn mqtt_map_fields(ui: &mut egui::Ui, s: &mut SettingsUi, dirty: &mut bool) {
     );
 }
 
+// ---- Telemetry ----
+
+fn telemetry_section(
+    ui: &mut egui::Ui,
+    s: &mut SettingsUi,
+    cmd: &mpsc::UnboundedSender<Command>,
+) {
+    let mut dirty = s.dirty.is(Section::Telemetry);
+    ui.label(egui::RichText::new("Device").strong());
+    telemetry_device_fields(ui, s, &mut dirty);
+    ui.separator();
+    ui.label(egui::RichText::new("Environment").strong());
+    telemetry_environment_fields(ui, s, &mut dirty);
+    ui.separator();
+    ui.label(egui::RichText::new("Air quality").strong());
+    telemetry_family_fields(
+        ui,
+        "air_quality",
+        &mut s.draft.telemetry.air_quality.measurement_enabled,
+        &mut s.draft.telemetry.air_quality.screen_enabled,
+        &mut s.draft.telemetry.air_quality.update_interval_secs,
+        &mut dirty,
+        "particulate / CO₂ sensor measurements",
+    );
+    ui.separator();
+    ui.label(egui::RichText::new("Power").strong());
+    telemetry_family_fields(
+        ui,
+        "power",
+        &mut s.draft.telemetry.power.measurement_enabled,
+        &mut s.draft.telemetry.power.screen_enabled,
+        &mut s.draft.telemetry.power.update_interval_secs,
+        &mut dirty,
+        "INA219 / INA260 power metrics (bus voltage, current, shunt)",
+    );
+    ui.separator();
+    ui.label(egui::RichText::new("Health").strong());
+    telemetry_family_fields(
+        ui,
+        "health",
+        &mut s.draft.telemetry.health.measurement_enabled,
+        &mut s.draft.telemetry.health.screen_enabled,
+        &mut s.draft.telemetry.health.update_interval_secs,
+        &mut dirty,
+        "heart-rate / SpO₂ / body-temp sensors",
+    );
+    commit(
+        s,
+        Section::Telemetry,
+        dirty,
+        ui,
+        "Save Telemetry",
+        cmd,
+        |d| Command::SetTelemetryCfg(d.telemetry.clone()),
+    );
+}
+
+fn telemetry_device_fields(ui: &mut egui::Ui, s: &mut SettingsUi, dirty: &mut bool) {
+    checkbox(
+        ui,
+        "Broadcast device metrics",
+        &mut s.draft.telemetry.device.enabled,
+        dirty,
+        "Periodically broadcast battery / voltage / airtime / channel utilization to the mesh. Off = send only to the phone, not over LoRa.",
+    );
+    u32_drag(
+        ui,
+        "Update every (s)",
+        &mut s.draft.telemetry.device.update_interval_secs,
+        0..=86_400,
+        dirty,
+        "How often device metrics are broadcast. 0 = firmware default (about 30 minutes).",
+    );
+}
+
+fn telemetry_environment_fields(ui: &mut egui::Ui, s: &mut SettingsUi, dirty: &mut bool) {
+    checkbox(
+        ui,
+        "Measurement enabled",
+        &mut s.draft.telemetry.environment.measurement_enabled,
+        dirty,
+        "Enable reading temperature / humidity / pressure sensors and broadcasting them.",
+    );
+    checkbox(
+        ui,
+        "Show on device screen",
+        &mut s.draft.telemetry.environment.screen_enabled,
+        dirty,
+        "Include the environment page in the rotating OLED carousel.",
+    );
+    checkbox(
+        ui,
+        "Display in Fahrenheit",
+        &mut s.draft.telemetry.environment.display_fahrenheit,
+        dirty,
+        "Sensor is always read in °C; this toggle only controls the on-device display unit.",
+    );
+    u32_drag(
+        ui,
+        "Update every (s)",
+        &mut s.draft.telemetry.environment.update_interval_secs,
+        0..=86_400,
+        dirty,
+        "How often environment metrics are broadcast. 0 = firmware default.",
+    );
+}
+
+fn telemetry_family_fields(
+    ui: &mut egui::Ui,
+    id_scope: &str,
+    measurement: &mut bool,
+    screen: &mut bool,
+    interval: &mut u32,
+    dirty: &mut bool,
+    hint: &str,
+) {
+    ui.push_id(id_scope, |ui| {
+        checkbox(
+            ui,
+            "Measurement enabled",
+            measurement,
+            dirty,
+            &format!("Collect and broadcast {hint}. Off = stop reading the sensor entirely."),
+        );
+        checkbox(
+            ui,
+            "Show on device screen",
+            screen,
+            dirty,
+            "Include this page in the rotating OLED carousel.",
+        );
+        u32_drag(
+            ui,
+            "Update every (s)",
+            interval,
+            0..=86_400,
+            dirty,
+            "How often these metrics are broadcast. 0 = firmware default.",
+        );
+    });
+}
+
 // ---- Commit helper ----
 
 fn commit(
@@ -900,6 +1045,7 @@ const fn section_label(section: Section) -> &'static str {
         Section::Display => "Display",
         Section::Bluetooth => "Bluetooth",
         Section::Mqtt => "MQTT",
+        Section::Telemetry => "Telemetry module",
     }
 }
 
@@ -1067,6 +1213,11 @@ fn sync_from_snapshot(snapshot: &DeviceSnapshot, s: &mut SettingsUi) {
         s.dirty.is(Section::Bluetooth),
     );
     sync_section(snapshot.mqtt.as_ref(), &mut s.draft.mqtt, s.dirty.is(Section::Mqtt));
+    sync_section(
+        snapshot.telemetry.as_ref(),
+        &mut s.draft.telemetry,
+        s.dirty.is(Section::Telemetry),
+    );
     if !s.dirty.is(Section::Position) {
         if let Some(pos) = snapshot.nodes.get(&snapshot.my_node).and_then(|n| n.position.as_ref()) {
             s.draft.fixed_lat = pos.latitude_deg;

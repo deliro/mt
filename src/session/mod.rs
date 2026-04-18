@@ -60,6 +60,7 @@ pub enum Event {
     DisplayUpdated(crate::domain::config::DisplaySettings),
     BluetoothUpdated(crate::domain::config::BluetoothSettings),
     MqttUpdated(crate::domain::config::MqttSettings),
+    TelemetryCfgUpdated(crate::domain::config::TelemetrySettings),
     StatsUpdated(MeshStats),
     TracerouteResult(crate::domain::traceroute::TracerouteResult),
     TracerouteFailed { target: NodeId, reason: String },
@@ -112,7 +113,8 @@ impl DeviceSession {
                 | Command::SetIgnored { .. }
                 | Command::Traceroute { .. }
                 | Command::SetChannel(_)
-                | Command::SetMqtt(_) => {}
+                | Command::SetMqtt(_)
+                | Command::SetTelemetryCfg(_) => {}
             }
         }
     }
@@ -178,7 +180,8 @@ async fn open_with_cancel(
                     | Command::SetIgnored { .. }
                     | Command::Traceroute { .. }
                     | Command::SetChannel(_)
-                    | Command::SetMqtt(_),
+                    | Command::SetMqtt(_)
+                    | Command::SetTelemetryCfg(_),
                 ) => {
                     debug!("ignoring command while connecting");
                 }
@@ -261,6 +264,7 @@ struct InitAcc {
     display: Option<crate::domain::config::DisplaySettings>,
     bluetooth: Option<crate::domain::config::BluetoothSettings>,
     mqtt: Option<crate::domain::config::MqttSettings>,
+    telemetry: Option<crate::domain::config::TelemetrySettings>,
     messages: Vec<TextMessage>,
 }
 
@@ -284,6 +288,7 @@ impl InitAcc {
             HandshakeFragment::Display(settings) => self.display = Some(settings),
             HandshakeFragment::Bluetooth(settings) => self.bluetooth = Some(settings),
             HandshakeFragment::Mqtt(settings) => self.mqtt = Some(settings),
+            HandshakeFragment::Telemetry(settings) => self.telemetry = Some(settings),
             HandshakeFragment::Message(msg) => self.messages.push(msg),
             HandshakeFragment::ConfigComplete { .. }
             | HandshakeFragment::MessageStateChanged { .. }
@@ -314,6 +319,7 @@ impl InitAcc {
             display: self.display,
             bluetooth: self.bluetooth,
             mqtt: self.mqtt,
+            telemetry: self.telemetry,
         }
     }
 }
@@ -517,6 +523,7 @@ async fn handle_config_command(
         }
         Command::SetChannel(channel) => send_set_channel(sink, my_node, &channel).await,
         Command::SetMqtt(s) => send_set_mqtt(sink, my_node, &s).await,
+        Command::SetTelemetryCfg(s) => send_set_telemetry_cfg(sink, my_node, &s).await,
         Command::Traceroute { .. } => Ok(()),
         Command::Connect(_)
         | Command::Disconnect
@@ -824,6 +831,36 @@ async fn send_set_mqtt(
         sink,
         my_node,
         meshtastic::module_config::PayloadVariant::Mqtt(mqtt),
+    )
+    .await
+}
+
+async fn send_set_telemetry_cfg(
+    sink: SinkRef<'_, impl FrameSink + ?Sized>,
+    my_node: NodeId,
+    s: &crate::domain::config::TelemetrySettings,
+) -> Result<(), ConnectError> {
+    let t = meshtastic::module_config::TelemetryConfig {
+        device_update_interval: s.device.update_interval_secs,
+        device_telemetry_enabled: s.device.enabled,
+        environment_update_interval: s.environment.update_interval_secs,
+        environment_measurement_enabled: s.environment.measurement_enabled,
+        environment_screen_enabled: s.environment.screen_enabled,
+        environment_display_fahrenheit: s.environment.display_fahrenheit,
+        air_quality_interval: s.air_quality.update_interval_secs,
+        air_quality_enabled: s.air_quality.measurement_enabled,
+        air_quality_screen_enabled: s.air_quality.screen_enabled,
+        power_update_interval: s.power.update_interval_secs,
+        power_measurement_enabled: s.power.measurement_enabled,
+        power_screen_enabled: s.power.screen_enabled,
+        health_update_interval: s.health.update_interval_secs,
+        health_measurement_enabled: s.health.measurement_enabled,
+        health_screen_enabled: s.health.screen_enabled,
+    };
+    send_module_config(
+        sink,
+        my_node,
+        meshtastic::module_config::PayloadVariant::Telemetry(t),
     )
     .await
 }
@@ -1172,17 +1209,19 @@ fn config_to_events(cfg: meshtastic::Config) -> Vec<IncomingOutcome> {
 
 fn module_config_to_events(cfg: meshtastic::ModuleConfig) -> Vec<IncomingOutcome> {
     use meshtastic::module_config::PayloadVariant;
-    use crate::session::handshake::mqtt_from_proto;
+    use crate::session::handshake::{mqtt_from_proto, telemetry_from_proto};
     let Some(variant) = cfg.payload_variant else { return Vec::new() };
     match variant {
         PayloadVariant::Mqtt(m) => {
             vec![IncomingOutcome::Event(Event::MqttUpdated(mqtt_from_proto(&m)))]
         }
+        PayloadVariant::Telemetry(t) => {
+            vec![IncomingOutcome::Event(Event::TelemetryCfgUpdated(telemetry_from_proto(&t)))]
+        }
         PayloadVariant::Serial(_)
         | PayloadVariant::ExternalNotification(_)
         | PayloadVariant::StoreForward(_)
         | PayloadVariant::RangeTest(_)
-        | PayloadVariant::Telemetry(_)
         | PayloadVariant::CannedMessage(_)
         | PayloadVariant::Audio(_)
         | PayloadVariant::RemoteHardware(_)
