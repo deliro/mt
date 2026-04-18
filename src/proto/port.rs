@@ -20,6 +20,7 @@ pub enum PortPayload {
     Telemetry(meshtastic::Telemetry),
     Routing(meshtastic::Routing),
     Admin(meshtastic::AdminMessage),
+    Traceroute(meshtastic::RouteDiscovery),
     Unknown { port: i32, bytes: Bytes },
 }
 
@@ -35,6 +36,9 @@ pub fn parse(port: i32, bytes: &[u8]) -> Result<PortPayload, ParseError> {
         PortNum::TelemetryApp => PortPayload::Telemetry(meshtastic::Telemetry::decode(bytes)?),
         PortNum::RoutingApp => PortPayload::Routing(meshtastic::Routing::decode(bytes)?),
         PortNum::AdminApp => PortPayload::Admin(meshtastic::AdminMessage::decode(bytes)?),
+        PortNum::TracerouteApp => {
+            PortPayload::Traceroute(meshtastic::RouteDiscovery::decode(bytes)?)
+        }
         _ => PortPayload::Unknown { port, bytes: Bytes::copy_from_slice(bytes) },
     })
 }

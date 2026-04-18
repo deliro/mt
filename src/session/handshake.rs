@@ -64,6 +64,7 @@ fn packet_fragments(p: meshtastic::MeshPacket) -> Vec<HandshakeFragment> {
         | PortPayload::Telemetry(_)
         | PortPayload::Routing(_)
         | PortPayload::Admin(_)
+        | PortPayload::Traceroute(_)
         | PortPayload::Unknown { .. } => Vec::new(),
     }
 }

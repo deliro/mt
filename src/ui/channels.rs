@@ -71,6 +71,10 @@ fn empty_channel(index: u8) -> Channel {
 }
 
 fn channel_row(ui: &mut egui::Ui, chs: &mut ChannelsUi, index: u8) {
+    ui.push_id(("channel_row", index), |ui| channel_row_inner(ui, chs, index));
+}
+
+fn channel_row_inner(ui: &mut egui::Ui, chs: &mut ChannelsUi, index: u8) {
     let Some(draft) = chs.drafts.get(&index).cloned() else { return };
     let dirty = chs.dirty.contains(&index);
     let title = row_title(&draft, dirty);

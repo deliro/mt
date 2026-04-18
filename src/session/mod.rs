@@ -1106,6 +1106,10 @@ fn packet_outcomes(p: meshtastic::MeshPacket, my_node: NodeId) -> Vec<IncomingOu
             state: DeliveryState::Acked,
         }))],
         PortPayload::Routing(r) => routing_to_outcomes(PacketId(request_id), NodeId(p.from), r),
+        PortPayload::Traceroute(rd) => vec![IncomingOutcome::RouteReply {
+            request_id: PacketId(request_id),
+            route: route_discovery_to_result(NodeId(p.from), &rd),
+        }],
         PortPayload::Position(_)
         | PortPayload::NodeInfo(_)
         | PortPayload::Admin(_)
