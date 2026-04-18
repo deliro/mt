@@ -127,6 +127,10 @@ fn role_from_proto(role: meshtastic::config::device_config::Role) -> NodeRole {
 #[allow(dead_code)]
 fn _touch_system_time(_: SystemTime) {}
 
+pub fn channel_to_domain(ch: meshtastic::Channel) -> Vec<HandshakeFragment> {
+    channel_fragments(ch)
+}
+
 fn channel_fragments(ch: meshtastic::Channel) -> Vec<HandshakeFragment> {
     let Some(index) = ChannelIndex::new(ch.index as u8) else {
         return Vec::new();
@@ -136,11 +140,25 @@ fn channel_fragments(ch: meshtastic::Channel) -> Vec<HandshakeFragment> {
         meshtastic::channel::Role::Secondary => ChannelRole::Secondary,
         meshtastic::channel::Role::Disabled => ChannelRole::Disabled,
     };
-    let (name, has_psk) = match ch.settings {
-        Some(s) => (s.name, !s.psk.is_empty()),
-        None => (String::new(), false),
+    let (name, psk, uplink, downlink, position_precision) = match ch.settings {
+        Some(s) => (
+            s.name,
+            s.psk,
+            s.uplink_enabled,
+            s.downlink_enabled,
+            s.module_settings.map_or(0, |m| m.position_precision),
+        ),
+        None => (String::new(), Vec::new(), false, false, 0),
     };
-    vec![HandshakeFragment::Channel(Channel { index, role, name, has_psk })]
+    vec![HandshakeFragment::Channel(Channel {
+        index,
+        role,
+        name,
+        psk,
+        uplink_enabled: uplink,
+        downlink_enabled: downlink,
+        position_precision,
+    })]
 }
 
 fn config_fragments(cfg: meshtastic::Config) -> Vec<HandshakeFragment> {

@@ -1,3 +1,4 @@
+use crate::domain::channel::Channel;
 use crate::domain::config::{
     BluetoothSettings, DeviceSettings, DisplaySettings, LoraSettings, NetworkSettings,
     PositionSettings, PowerSettings,
@@ -26,6 +27,7 @@ pub enum Command {
     SetFavorite { node: crate::domain::ids::NodeId, favorite: bool },
     SetIgnored { node: crate::domain::ids::NodeId, ignored: bool },
     Traceroute { node: crate::domain::ids::NodeId },
+    SetChannel(Channel),
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]

@@ -30,7 +30,10 @@ fn primary_channel() -> Channel {
         index: ChannelIndex::primary(),
         role: ChannelRole::Primary,
         name: "Primary".into(),
-        has_psk: true,
+        psk: vec![1],
+        uplink_enabled: false,
+        downlink_enabled: false,
+        position_precision: 0,
     }
 }
 

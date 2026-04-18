@@ -46,13 +46,19 @@ fn device_snapshot_upserts_channels() {
         index: ChannelIndex::primary(),
         role: ChannelRole::Primary,
         name: "LongFast".into(),
-        has_psk: true,
+        psk: vec![1],
+        uplink_enabled: false,
+        downlink_enabled: false,
+        position_precision: 0,
     });
     snap.upsert_channel(Channel {
         index: ChannelIndex::primary(),
         role: ChannelRole::Primary,
         name: "Renamed".into(),
-        has_psk: true,
+        psk: vec![1],
+        uplink_enabled: false,
+        downlink_enabled: false,
+        position_precision: 0,
     });
     assert_eq!(snap.channels.len(), 1);
     assert_eq!(snap.channels.first().map(|c| c.name.as_str()), Some("Renamed"));

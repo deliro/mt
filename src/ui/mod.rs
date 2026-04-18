@@ -1,3 +1,4 @@
+pub mod channels;
 pub mod chat;
 pub mod connect;
 pub mod details;
@@ -44,6 +45,7 @@ pub struct AppState {
     pub chat_ui: chat::ChatUi,
     pub nodes_ui: nodes::NodesUi,
     pub settings_ui: settings::SettingsUi,
+    pub channels_ui: channels::ChannelsUi,
     pub traceroutes: TracerouteUi,
 }
 
@@ -64,6 +66,7 @@ pub enum Tab {
     #[default]
     Chat,
     Nodes,
+    Channels,
     Settings,
 }
 
@@ -323,6 +326,7 @@ impl eframe::App for App {
             ui.separator();
             ui.selectable_value(&mut self.state.active_tab, Tab::Chat, "Chat");
             ui.selectable_value(&mut self.state.active_tab, Tab::Nodes, "Nodes");
+            ui.selectable_value(&mut self.state.active_tab, Tab::Channels, "Channels");
             ui.selectable_value(&mut self.state.active_tab, Tab::Settings, "Settings");
         });
         match self.state.active_tab {
@@ -341,6 +345,12 @@ impl eframe::App for App {
                 egui::CentralPanel::default().show(ctx, |ui| {
                     let AppState { snapshot, nodes_ui, detail_node, .. } = &mut self.state;
                     nodes::render(ui, snapshot, nodes_ui, detail_node);
+                });
+            }
+            Tab::Channels => {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    let AppState { snapshot, channels_ui, .. } = &mut self.state;
+                    channels::render(ui, snapshot, channels_ui, &self.cmd_tx);
                 });
             }
             Tab::Settings => {

@@ -30,6 +30,11 @@ pub const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(300);
 pub const ACK_TIMEOUT: Duration = Duration::from_secs(30);
 pub const MY_INFO_TIMEOUT: Duration = Duration::from_secs(15);
 
+trait FrameSink: futures::Sink<Vec<u8>, Error = crate::transport::TransportError> {}
+impl<T: ?Sized + futures::Sink<Vec<u8>, Error = crate::transport::TransportError>> FrameSink for T {}
+
+type SinkRef<'a, S> = &'a mut Pin<Box<S>>;
+
 #[derive(Clone, Debug)]
 pub enum Event {
     Connecting,
@@ -93,7 +98,8 @@ impl DeviceSession {
                 | Command::Admin(_)
                 | Command::SetFavorite { .. }
                 | Command::SetIgnored { .. }
-                | Command::Traceroute { .. } => {}
+                | Command::Traceroute { .. }
+                | Command::SetChannel(_) => {}
             }
         }
     }
@@ -157,7 +163,8 @@ async fn open_with_cancel(
                     | Command::Admin(_)
                     | Command::SetFavorite { .. }
                     | Command::SetIgnored { .. }
-                    | Command::Traceroute { .. },
+                    | Command::Traceroute { .. }
+                    | Command::SetChannel(_),
                 ) => {
                     debug!("ignoring command while connecting");
                 }
@@ -295,7 +302,7 @@ impl InitAcc {
 }
 
 async fn run_ready_loop(
-    sink: &mut Pin<Box<impl futures::Sink<Vec<u8>, Error = crate::transport::TransportError> + ?Sized>>,
+    sink: SinkRef<'_, impl FrameSink + ?Sized>,
     stream: &mut (impl futures::Stream<Item = Result<Vec<u8>, crate::transport::TransportError>>
               + Unpin),
     my_node: NodeId,
@@ -351,7 +358,7 @@ struct PendingOps {
 async fn handle_command(
     cmd: Command,
     my_node: NodeId,
-    sink: &mut Pin<Box<impl futures::Sink<Vec<u8>, Error = crate::transport::TransportError> + ?Sized>>,
+    sink: SinkRef<'_, impl FrameSink + ?Sized>,
     tx: &mpsc::Sender<Event>,
     pending: &mut PendingOps,
 ) -> LoopStep {
@@ -392,7 +399,7 @@ struct SendTextRequest {
 }
 
 async fn handle_send_text(
-    sink: &mut Pin<Box<impl futures::Sink<Vec<u8>, Error = crate::transport::TransportError> + ?Sized>>,
+    sink: SinkRef<'_, impl FrameSink + ?Sized>,
     my_node: NodeId,
     tx: &mpsc::Sender<Event>,
     pending: &mut PendingOps,
@@ -428,7 +435,7 @@ async fn handle_send_text(
 async fn handle_config_command(
     cmd: Command,
     my_node: NodeId,
-    sink: &mut Pin<Box<impl futures::Sink<Vec<u8>, Error = crate::transport::TransportError> + ?Sized>>,
+    sink: SinkRef<'_, impl FrameSink + ?Sized>,
 ) -> LoopStep {
     let result = match cmd {
         Command::SetOwner { long_name, short_name } => {
@@ -452,6 +459,7 @@ async fn handle_config_command(
         Command::SetIgnored { node, ignored } => {
             send_ignored(sink, my_node, node, ignored).await
         }
+        Command::SetChannel(channel) => send_set_channel(sink, my_node, &channel).await,
         Command::Traceroute { .. } => Ok(()),
         Command::Connect(_)
         | Command::Disconnect
@@ -465,7 +473,7 @@ async fn handle_config_command(
 }
 
 async fn send_set_owner(
-    sink: &mut Pin<Box<impl futures::Sink<Vec<u8>, Error = crate::transport::TransportError> + ?Sized>>,
+    sink: SinkRef<'_, impl FrameSink + ?Sized>,
     my_node: NodeId,
     long_name: &str,
     short_name: &str,
@@ -485,7 +493,7 @@ async fn send_set_owner(
 }
 
 async fn send_set_lora(
-    sink: &mut Pin<Box<impl futures::Sink<Vec<u8>, Error = crate::transport::TransportError> + ?Sized>>,
+    sink: SinkRef<'_, impl FrameSink + ?Sized>,
     my_node: NodeId,
     settings: &crate::domain::config::LoraSettings,
 ) -> Result<(), ConnectError> {
@@ -502,7 +510,7 @@ async fn send_set_lora(
 }
 
 async fn send_set_device(
-    sink: &mut Pin<Box<impl futures::Sink<Vec<u8>, Error = crate::transport::TransportError> + ?Sized>>,
+    sink: SinkRef<'_, impl FrameSink + ?Sized>,
     my_node: NodeId,
     s: &crate::domain::config::DeviceSettings,
 ) -> Result<(), ConnectError> {
@@ -519,7 +527,7 @@ async fn send_set_device(
 }
 
 async fn send_set_position(
-    sink: &mut Pin<Box<impl futures::Sink<Vec<u8>, Error = crate::transport::TransportError> + ?Sized>>,
+    sink: SinkRef<'_, impl FrameSink + ?Sized>,
     my_node: NodeId,
     s: &crate::domain::config::PositionSettings,
 ) -> Result<(), ConnectError> {
@@ -537,7 +545,7 @@ async fn send_set_position(
 }
 
 async fn send_set_power(
-    sink: &mut Pin<Box<impl futures::Sink<Vec<u8>, Error = crate::transport::TransportError> + ?Sized>>,
+    sink: SinkRef<'_, impl FrameSink + ?Sized>,
     my_node: NodeId,
     s: &crate::domain::config::PowerSettings,
 ) -> Result<(), ConnectError> {
@@ -553,7 +561,7 @@ async fn send_set_power(
 }
 
 async fn send_set_network(
-    sink: &mut Pin<Box<impl futures::Sink<Vec<u8>, Error = crate::transport::TransportError> + ?Sized>>,
+    sink: SinkRef<'_, impl FrameSink + ?Sized>,
     my_node: NodeId,
     s: &crate::domain::config::NetworkSettings,
 ) -> Result<(), ConnectError> {
@@ -569,7 +577,7 @@ async fn send_set_network(
 }
 
 async fn send_set_display(
-    sink: &mut Pin<Box<impl futures::Sink<Vec<u8>, Error = crate::transport::TransportError> + ?Sized>>,
+    sink: SinkRef<'_, impl FrameSink + ?Sized>,
     my_node: NodeId,
     s: &crate::domain::config::DisplaySettings,
 ) -> Result<(), ConnectError> {
@@ -588,7 +596,7 @@ async fn send_set_display(
 }
 
 async fn send_set_bluetooth(
-    sink: &mut Pin<Box<impl futures::Sink<Vec<u8>, Error = crate::transport::TransportError> + ?Sized>>,
+    sink: SinkRef<'_, impl FrameSink + ?Sized>,
     my_node: NodeId,
     s: &crate::domain::config::BluetoothSettings,
 ) -> Result<(), ConnectError> {
@@ -601,7 +609,7 @@ async fn send_set_bluetooth(
 }
 
 async fn send_set_fixed_position(
-    sink: &mut Pin<Box<impl futures::Sink<Vec<u8>, Error = crate::transport::TransportError> + ?Sized>>,
+    sink: SinkRef<'_, impl FrameSink + ?Sized>,
     my_node: NodeId,
     lat: f64,
     lon: f64,
@@ -623,7 +631,7 @@ async fn send_set_fixed_position(
 }
 
 async fn send_remove_fixed_position(
-    sink: &mut Pin<Box<impl futures::Sink<Vec<u8>, Error = crate::transport::TransportError> + ?Sized>>,
+    sink: SinkRef<'_, impl FrameSink + ?Sized>,
     my_node: NodeId,
 ) -> Result<(), ConnectError> {
     let admin = meshtastic::AdminMessage {
@@ -638,7 +646,7 @@ async fn send_remove_fixed_position(
 const TRACEROUTE_TIMEOUT: Duration = Duration::from_secs(60);
 
 async fn handle_traceroute(
-    sink: &mut Pin<Box<impl futures::Sink<Vec<u8>, Error = crate::transport::TransportError> + ?Sized>>,
+    sink: SinkRef<'_, impl FrameSink + ?Sized>,
     my_node: NodeId,
     tx: &mpsc::Sender<Event>,
     pending: &mut PendingOps,
@@ -655,7 +663,7 @@ async fn handle_traceroute(
 }
 
 async fn send_traceroute(
-    sink: &mut Pin<Box<impl futures::Sink<Vec<u8>, Error = crate::transport::TransportError> + ?Sized>>,
+    sink: SinkRef<'_, impl FrameSink + ?Sized>,
     my_node: NodeId,
     target: NodeId,
 ) -> Result<PacketId, ConnectError> {
@@ -711,7 +719,7 @@ fn spawn_traceroute_timeout(
 }
 
 async fn send_favorite(
-    sink: &mut Pin<Box<impl futures::Sink<Vec<u8>, Error = crate::transport::TransportError> + ?Sized>>,
+    sink: SinkRef<'_, impl FrameSink + ?Sized>,
     my_node: NodeId,
     node: NodeId,
     favorite: bool,
@@ -729,8 +737,42 @@ async fn send_favorite(
     send_admin(sink, my_node, admin).await
 }
 
+async fn send_set_channel(
+    sink: SinkRef<'_, impl FrameSink + ?Sized>,
+    my_node: NodeId,
+    ch: &crate::domain::channel::Channel,
+) -> Result<(), ConnectError> {
+    use crate::domain::channel::ChannelRole;
+    let role = match ch.role {
+        ChannelRole::Primary => meshtastic::channel::Role::Primary,
+        ChannelRole::Secondary => meshtastic::channel::Role::Secondary,
+        ChannelRole::Disabled => meshtastic::channel::Role::Disabled,
+    };
+    let settings = meshtastic::ChannelSettings {
+        name: ch.name.clone(),
+        psk: ch.psk.clone(),
+        uplink_enabled: ch.uplink_enabled,
+        downlink_enabled: ch.downlink_enabled,
+        module_settings: Some(meshtastic::ModuleSettings {
+            position_precision: ch.position_precision,
+            is_muted: false,
+        }),
+        ..Default::default()
+    };
+    let channel = meshtastic::Channel {
+        index: i32::from(ch.index.get()),
+        settings: Some(settings),
+        role: role as i32,
+    };
+    let admin = meshtastic::AdminMessage {
+        payload_variant: Some(meshtastic::admin_message::PayloadVariant::SetChannel(channel)),
+        ..Default::default()
+    };
+    send_admin(sink, my_node, admin).await
+}
+
 async fn send_ignored(
-    sink: &mut Pin<Box<impl futures::Sink<Vec<u8>, Error = crate::transport::TransportError> + ?Sized>>,
+    sink: SinkRef<'_, impl FrameSink + ?Sized>,
     my_node: NodeId,
     node: NodeId,
     ignored: bool,
@@ -749,7 +791,7 @@ async fn send_ignored(
 }
 
 async fn send_admin_action(
-    sink: &mut Pin<Box<impl futures::Sink<Vec<u8>, Error = crate::transport::TransportError> + ?Sized>>,
+    sink: SinkRef<'_, impl FrameSink + ?Sized>,
     my_node: NodeId,
     action: crate::session::commands::AdminAction,
 ) -> Result<(), ConnectError> {
@@ -771,7 +813,7 @@ async fn send_admin_action(
 }
 
 async fn send_config(
-    sink: &mut Pin<Box<impl futures::Sink<Vec<u8>, Error = crate::transport::TransportError> + ?Sized>>,
+    sink: SinkRef<'_, impl FrameSink + ?Sized>,
     my_node: NodeId,
     payload: meshtastic::config::PayloadVariant,
 ) -> Result<(), ConnectError> {
@@ -784,7 +826,7 @@ async fn send_config(
 }
 
 async fn send_admin(
-    sink: &mut Pin<Box<impl futures::Sink<Vec<u8>, Error = crate::transport::TransportError> + ?Sized>>,
+    sink: SinkRef<'_, impl FrameSink + ?Sized>,
     my_node: NodeId,
     admin: meshtastic::AdminMessage,
 ) -> Result<(), ConnectError> {
@@ -870,7 +912,7 @@ enum IncomingOutcome {
 }
 
 async fn send_want_config_id(
-    sink: &mut Pin<Box<impl futures::Sink<Vec<u8>, Error = crate::transport::TransportError> + ?Sized>>,
+    sink: SinkRef<'_, impl FrameSink + ?Sized>,
 ) -> Result<(), ConnectError> {
     let id = crate::domain::ids::ConfigId::random().0;
     let msg = meshtastic::ToRadio {
@@ -883,7 +925,7 @@ async fn send_want_config_id(
 }
 
 async fn send_text(
-    sink: &mut Pin<Box<impl futures::Sink<Vec<u8>, Error = crate::transport::TransportError> + ?Sized>>,
+    sink: SinkRef<'_, impl FrameSink + ?Sized>,
     channel: ChannelIndex,
     to: Recipient,
     text: &str,
@@ -918,7 +960,7 @@ async fn send_text(
 }
 
 async fn send_heartbeat(
-    sink: &mut Pin<Box<impl futures::Sink<Vec<u8>, Error = crate::transport::TransportError> + ?Sized>>,
+    sink: SinkRef<'_, impl FrameSink + ?Sized>,
 ) -> Result<(), ConnectError> {
     let msg = meshtastic::ToRadio {
         payload_variant: Some(meshtastic::to_radio::PayloadVariant::Heartbeat(
@@ -1153,17 +1195,13 @@ fn stats_from_local_stats(s: &meshtastic::LocalStats) -> MeshStats {
 }
 
 fn channel_to_events(ch: meshtastic::Channel) -> Vec<Event> {
-    use crate::domain::channel::ChannelRole;
-    let Some(index) = ChannelIndex::new(ch.index as u8) else { return Vec::new() };
-    let role = match ch.role() {
-        meshtastic::channel::Role::Primary => ChannelRole::Primary,
-        meshtastic::channel::Role::Secondary => ChannelRole::Secondary,
-        meshtastic::channel::Role::Disabled => ChannelRole::Disabled,
-    };
-    let (name, has_psk) = match ch.settings {
-        Some(s) => (s.name, !s.psk.is_empty()),
-        None => (String::new(), false),
-    };
-    vec![Event::ChannelUpdated(Channel { index, role, name, has_psk })]
+    use crate::domain::session::HandshakeFragment;
+    crate::session::handshake::channel_to_domain(ch)
+        .into_iter()
+        .filter_map(|f| match f {
+            HandshakeFragment::Channel(c) => Some(Event::ChannelUpdated(c)),
+            _ => None,
+        })
+        .collect()
 }
 
