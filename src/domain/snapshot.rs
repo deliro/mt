@@ -2,8 +2,9 @@ use std::collections::HashMap;
 
 use crate::domain::channel::Channel;
 use crate::domain::config::{
-    BluetoothSettings, DeviceSettings, DisplaySettings, LoraSettings, MqttSettings,
-    NeighborInfoSettings, NetworkSettings, PositionSettings, PowerSettings, SecuritySettings,
+    BluetoothSettings, CannedMessageSettings, DeviceSettings, DisplaySettings,
+    ExternalNotificationSettings, LoraSettings, MqttSettings, NeighborInfoSettings,
+    NetworkSettings, PositionSettings, PowerSettings, RangeTestSettings, SecuritySettings,
     StoreForwardSettings, TelemetrySettings,
 };
 use crate::domain::ids::NodeId;
@@ -32,6 +33,9 @@ pub struct DeviceSnapshot {
     pub neighbor_info: Option<NeighborInfoSettings>,
     pub store_forward: Option<StoreForwardSettings>,
     pub security: Option<SecuritySettings>,
+    pub ext_notif: Option<ExternalNotificationSettings>,
+    pub canned: Option<CannedMessageSettings>,
+    pub range_test: Option<RangeTestSettings>,
     pub stats: MeshStats,
 }
 

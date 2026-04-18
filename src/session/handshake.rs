@@ -2,9 +2,10 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::domain::channel::{Channel, ChannelRole};
 use crate::domain::config::{
-    BluetoothSettings, ConsoleAccess, DeviceSettings, DisplaySettings, LoraSettings, MqttSettings,
-    NeighborInfoSettings, NetworkSettings, PositionSettings, PowerSettings, SecuritySettings,
-    StoreForwardSettings, TelemetrySettings,
+    BluetoothSettings, CannedMessageSettings, ConsoleAccess, DeviceSettings, DisplaySettings,
+    ExtNotifAlerts, ExtNotifOutputs, ExtNotifSound, ExtNotifTargets, ExternalNotificationSettings,
+    LoraSettings, MqttSettings, NeighborInfoSettings, NetworkSettings, PositionSettings,
+    PowerSettings, RangeTestSettings, SecuritySettings, StoreForwardSettings, TelemetrySettings,
 };
 use crate::domain::ids::{BROADCAST_NODE, ChannelIndex, ConfigId, NodeId, PacketId};
 use crate::domain::message::{DeliveryState, Direction, Recipient, TextMessage};
@@ -178,10 +179,16 @@ fn module_config_fragments(cfg: meshtastic::ModuleConfig) -> Vec<HandshakeFragme
         PayloadVariant::StoreForward(sf) => {
             vec![HandshakeFragment::StoreForward(store_forward_from_proto(sf))]
         }
+        PayloadVariant::ExternalNotification(e) => {
+            vec![HandshakeFragment::ExtNotif(ext_notif_from_proto(&e))]
+        }
+        PayloadVariant::CannedMessage(c) => {
+            vec![HandshakeFragment::Canned(canned_from_proto(&c))]
+        }
+        PayloadVariant::RangeTest(r) => {
+            vec![HandshakeFragment::RangeTest(range_test_from_proto(r))]
+        }
         PayloadVariant::Serial(_)
-        | PayloadVariant::ExternalNotification(_)
-        | PayloadVariant::RangeTest(_)
-        | PayloadVariant::CannedMessage(_)
         | PayloadVariant::Audio(_)
         | PayloadVariant::RemoteHardware(_)
         | PayloadVariant::AmbientLighting(_)
@@ -200,6 +207,62 @@ pub const fn neighbor_info_from_proto(
         enabled: n.enabled,
         transmit_over_lora: n.transmit_over_lora,
         update_interval_secs: n.update_interval,
+    }
+}
+
+pub const fn ext_notif_from_proto(
+    e: &meshtastic::module_config::ExternalNotificationConfig,
+) -> ExternalNotificationSettings {
+    ExternalNotificationSettings {
+        enabled: e.enabled,
+        output_ms: e.output_ms,
+        nag_timeout_secs: e.nag_timeout,
+        outputs: ExtNotifOutputs {
+            output_pin: e.output,
+            output_vibra_pin: e.output_vibra,
+            output_buzzer_pin: e.output_buzzer,
+            active_high: e.active,
+        },
+        alerts: ExtNotifAlerts {
+            message: ExtNotifTargets {
+                led: e.alert_message,
+                vibra: e.alert_message_vibra,
+                buzzer: e.alert_message_buzzer,
+            },
+            bell: ExtNotifTargets {
+                led: e.alert_bell,
+                vibra: e.alert_bell_vibra,
+                buzzer: e.alert_bell_buzzer,
+            },
+        },
+        sound: ExtNotifSound {
+            use_pwm: e.use_pwm,
+            use_i2s_as_buzzer: e.use_i2s_as_buzzer,
+        },
+    }
+}
+
+pub fn canned_from_proto(
+    c: &meshtastic::module_config::CannedMessageConfig,
+) -> CannedMessageSettings {
+    CannedMessageSettings {
+        rotary1_enabled: c.rotary1_enabled,
+        updown1_enabled: c.updown1_enabled,
+        send_bell: c.send_bell,
+        rotary_pin_a: c.inputbroker_pin_a,
+        rotary_pin_b: c.inputbroker_pin_b,
+        rotary_pin_press: c.inputbroker_pin_press,
+    }
+}
+
+pub const fn range_test_from_proto(
+    r: meshtastic::module_config::RangeTestConfig,
+) -> RangeTestSettings {
+    RangeTestSettings {
+        enabled: r.enabled,
+        sender_secs: r.sender,
+        save: r.save,
+        clear_on_reboot: r.clear_on_reboot,
     }
 }
 

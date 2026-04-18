@@ -64,6 +64,9 @@ pub enum Event {
     NeighborInfoUpdated(crate::domain::config::NeighborInfoSettings),
     StoreForwardUpdated(crate::domain::config::StoreForwardSettings),
     SecurityUpdated(crate::domain::config::SecuritySettings),
+    ExtNotifUpdated(crate::domain::config::ExternalNotificationSettings),
+    CannedUpdated(crate::domain::config::CannedMessageSettings),
+    RangeTestUpdated(crate::domain::config::RangeTestSettings),
     StatsUpdated(MeshStats),
     TracerouteResult(crate::domain::traceroute::TracerouteResult),
     TracerouteFailed { target: NodeId, reason: String },
@@ -121,6 +124,9 @@ impl DeviceSession {
                 | Command::SetNeighborInfo(_)
                 | Command::SetStoreForward(_)
                 | Command::SetSecurity(_)
+                | Command::SetExtNotif(_)
+                | Command::SetCanned(_)
+                | Command::SetRangeTest(_)
                 | Command::RemoteAdmin { .. } => {}
             }
         }
@@ -192,6 +198,9 @@ async fn open_with_cancel(
                     | Command::SetNeighborInfo(_)
                     | Command::SetStoreForward(_)
                     | Command::SetSecurity(_)
+                    | Command::SetExtNotif(_)
+                    | Command::SetCanned(_)
+                    | Command::SetRangeTest(_)
                     | Command::RemoteAdmin { .. },
                 ) => {
                     debug!("ignoring command while connecting");
@@ -279,6 +288,9 @@ struct InitAcc {
     neighbor_info: Option<crate::domain::config::NeighborInfoSettings>,
     store_forward: Option<crate::domain::config::StoreForwardSettings>,
     security: Option<crate::domain::config::SecuritySettings>,
+    ext_notif: Option<crate::domain::config::ExternalNotificationSettings>,
+    canned: Option<crate::domain::config::CannedMessageSettings>,
+    range_test: Option<crate::domain::config::RangeTestSettings>,
     messages: Vec<TextMessage>,
 }
 
@@ -306,6 +318,9 @@ impl InitAcc {
             HandshakeFragment::NeighborInfo(settings) => self.neighbor_info = Some(settings),
             HandshakeFragment::StoreForward(settings) => self.store_forward = Some(settings),
             HandshakeFragment::Security(settings) => self.security = Some(settings),
+            HandshakeFragment::ExtNotif(settings) => self.ext_notif = Some(settings),
+            HandshakeFragment::Canned(settings) => self.canned = Some(settings),
+            HandshakeFragment::RangeTest(settings) => self.range_test = Some(settings),
             HandshakeFragment::Message(msg) => self.messages.push(msg),
             HandshakeFragment::ConfigComplete { .. }
             | HandshakeFragment::MessageStateChanged { .. }
@@ -340,6 +355,9 @@ impl InitAcc {
             neighbor_info: self.neighbor_info,
             store_forward: self.store_forward,
             security: self.security,
+            ext_notif: self.ext_notif,
+            canned: self.canned,
+            range_test: self.range_test,
         }
     }
 }
@@ -519,7 +537,19 @@ async fn handle_config_command(
     my_node: NodeId,
     sink: SinkRef<'_, impl FrameSink + ?Sized>,
 ) -> LoopStep {
-    let result = match cmd {
+    let result = dispatch_config_command(cmd, my_node, sink).await;
+    match result {
+        Ok(()) => LoopStep::Continue,
+        Err(e) => LoopStep::Error(e.to_string()),
+    }
+}
+
+async fn dispatch_config_command(
+    cmd: Command,
+    my_node: NodeId,
+    sink: SinkRef<'_, impl FrameSink + ?Sized>,
+) -> Result<(), ConnectError> {
+    match cmd {
         Command::SetOwner { long_name, short_name } => {
             send_set_owner(sink, my_node, &long_name, &short_name).await
         }
@@ -541,24 +571,47 @@ async fn handle_config_command(
         Command::SetFavorite { node, favorite } => {
             send_favorite(sink, my_node, node, favorite).await
         }
-        Command::SetIgnored { node, ignored } => {
-            send_ignored(sink, my_node, node, ignored).await
-        }
+        Command::SetIgnored { node, ignored } => send_ignored(sink, my_node, node, ignored).await,
         Command::SetChannel(channel) => send_set_channel(sink, my_node, &channel).await,
+        Command::SetSecurity(s) => send_set_security(sink, my_node, &s).await,
+        module => dispatch_module_command(module, my_node, sink).await,
+    }
+}
+
+async fn dispatch_module_command(
+    cmd: Command,
+    my_node: NodeId,
+    sink: SinkRef<'_, impl FrameSink + ?Sized>,
+) -> Result<(), ConnectError> {
+    match cmd {
         Command::SetMqtt(s) => send_set_mqtt(sink, my_node, &s).await,
         Command::SetTelemetryCfg(s) => send_set_telemetry_cfg(sink, my_node, &s).await,
         Command::SetNeighborInfo(s) => send_set_neighbor_info(sink, my_node, &s).await,
         Command::SetStoreForward(s) => send_set_store_forward(sink, my_node, &s).await,
-        Command::SetSecurity(s) => send_set_security(sink, my_node, &s).await,
-        Command::Traceroute { .. } => Ok(()),
+        Command::SetExtNotif(s) => send_set_ext_notif(sink, my_node, &s).await,
+        Command::SetCanned(s) => send_set_canned(sink, my_node, &s).await,
+        Command::SetRangeTest(s) => send_set_range_test(sink, my_node, &s).await,
         Command::Connect(_)
         | Command::Disconnect
         | Command::SendText { .. }
-        | Command::AckTimeout(_) => return LoopStep::Continue,
-    };
-    match result {
-        Ok(()) => LoopStep::Continue,
-        Err(e) => LoopStep::Error(e.to_string()),
+        | Command::AckTimeout(_)
+        | Command::Traceroute { .. }
+        | Command::SetOwner { .. }
+        | Command::SetLora(_)
+        | Command::SetDevice(_)
+        | Command::SetPosition(_)
+        | Command::SetPower(_)
+        | Command::SetNetwork(_)
+        | Command::SetDisplay(_)
+        | Command::SetBluetooth(_)
+        | Command::SetFixedPosition { .. }
+        | Command::RemoveFixedPosition
+        | Command::Admin(_)
+        | Command::RemoteAdmin { .. }
+        | Command::SetFavorite { .. }
+        | Command::SetIgnored { .. }
+        | Command::SetChannel(_)
+        | Command::SetSecurity(_) => Ok(()),
     }
 }
 
@@ -905,6 +958,80 @@ async fn send_set_neighbor_info(
         sink,
         my_node,
         meshtastic::module_config::PayloadVariant::NeighborInfo(ni),
+    )
+    .await
+}
+
+async fn send_set_ext_notif(
+    sink: SinkRef<'_, impl FrameSink + ?Sized>,
+    my_node: NodeId,
+    s: &crate::domain::config::ExternalNotificationSettings,
+) -> Result<(), ConnectError> {
+    let e = meshtastic::module_config::ExternalNotificationConfig {
+        enabled: s.enabled,
+        output_ms: s.output_ms,
+        nag_timeout: s.nag_timeout_secs,
+        output: s.outputs.output_pin,
+        output_vibra: s.outputs.output_vibra_pin,
+        output_buzzer: s.outputs.output_buzzer_pin,
+        active: s.outputs.active_high,
+        alert_message: s.alerts.message.led,
+        alert_message_vibra: s.alerts.message.vibra,
+        alert_message_buzzer: s.alerts.message.buzzer,
+        alert_bell: s.alerts.bell.led,
+        alert_bell_vibra: s.alerts.bell.vibra,
+        alert_bell_buzzer: s.alerts.bell.buzzer,
+        use_pwm: s.sound.use_pwm,
+        use_i2s_as_buzzer: s.sound.use_i2s_as_buzzer,
+    };
+    send_module_config(
+        sink,
+        my_node,
+        meshtastic::module_config::PayloadVariant::ExternalNotification(e),
+    )
+    .await
+}
+
+async fn send_set_canned(
+    sink: SinkRef<'_, impl FrameSink + ?Sized>,
+    my_node: NodeId,
+    s: &crate::domain::config::CannedMessageSettings,
+) -> Result<(), ConnectError> {
+    let c = meshtastic::module_config::CannedMessageConfig {
+        rotary1_enabled: s.rotary1_enabled,
+        updown1_enabled: s.updown1_enabled,
+        send_bell: s.send_bell,
+        inputbroker_pin_a: s.rotary_pin_a,
+        inputbroker_pin_b: s.rotary_pin_b,
+        inputbroker_pin_press: s.rotary_pin_press,
+        inputbroker_event_cw: 0,
+        inputbroker_event_ccw: 0,
+        inputbroker_event_press: 0,
+        ..Default::default()
+    };
+    send_module_config(
+        sink,
+        my_node,
+        meshtastic::module_config::PayloadVariant::CannedMessage(c),
+    )
+    .await
+}
+
+async fn send_set_range_test(
+    sink: SinkRef<'_, impl FrameSink + ?Sized>,
+    my_node: NodeId,
+    s: &crate::domain::config::RangeTestSettings,
+) -> Result<(), ConnectError> {
+    let r = meshtastic::module_config::RangeTestConfig {
+        enabled: s.enabled,
+        sender: s.sender_secs,
+        save: s.save,
+        clear_on_reboot: s.clear_on_reboot,
+    };
+    send_module_config(
+        sink,
+        my_node,
+        meshtastic::module_config::PayloadVariant::RangeTest(r),
     )
     .await
 }
@@ -1306,7 +1433,8 @@ fn config_to_events(cfg: meshtastic::Config) -> Vec<IncomingOutcome> {
 fn module_config_to_events(cfg: meshtastic::ModuleConfig) -> Vec<IncomingOutcome> {
     use meshtastic::module_config::PayloadVariant;
     use crate::session::handshake::{
-        mqtt_from_proto, neighbor_info_from_proto, store_forward_from_proto, telemetry_from_proto,
+        canned_from_proto, ext_notif_from_proto, mqtt_from_proto, neighbor_info_from_proto,
+        range_test_from_proto, store_forward_from_proto, telemetry_from_proto,
     };
     let Some(variant) = cfg.payload_variant else { return Vec::new() };
     match variant {
@@ -1322,10 +1450,16 @@ fn module_config_to_events(cfg: meshtastic::ModuleConfig) -> Vec<IncomingOutcome
         PayloadVariant::StoreForward(sf) => {
             vec![IncomingOutcome::Event(Event::StoreForwardUpdated(store_forward_from_proto(sf)))]
         }
+        PayloadVariant::ExternalNotification(e) => {
+            vec![IncomingOutcome::Event(Event::ExtNotifUpdated(ext_notif_from_proto(&e)))]
+        }
+        PayloadVariant::CannedMessage(c) => {
+            vec![IncomingOutcome::Event(Event::CannedUpdated(canned_from_proto(&c)))]
+        }
+        PayloadVariant::RangeTest(r) => {
+            vec![IncomingOutcome::Event(Event::RangeTestUpdated(range_test_from_proto(r)))]
+        }
         PayloadVariant::Serial(_)
-        | PayloadVariant::ExternalNotification(_)
-        | PayloadVariant::RangeTest(_)
-        | PayloadVariant::CannedMessage(_)
         | PayloadVariant::Audio(_)
         | PayloadVariant::RemoteHardware(_)
         | PayloadVariant::AmbientLighting(_)

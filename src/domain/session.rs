@@ -39,6 +39,9 @@ pub struct HandshakeAcc {
     pub neighbor_info: Option<crate::domain::config::NeighborInfoSettings>,
     pub store_forward: Option<crate::domain::config::StoreForwardSettings>,
     pub security: Option<crate::domain::config::SecuritySettings>,
+    pub ext_notif: Option<crate::domain::config::ExternalNotificationSettings>,
+    pub canned: Option<crate::domain::config::CannedMessageSettings>,
+    pub range_test: Option<crate::domain::config::RangeTestSettings>,
 }
 
 pub fn start_handshake(transport: TransportKind, config_id: ConfigId) -> SessionState {
@@ -63,6 +66,9 @@ pub fn start_handshake(transport: TransportKind, config_id: ConfigId) -> Session
         neighbor_info: None,
         store_forward: None,
         security: None,
+        ext_notif: None,
+        canned: None,
+        range_test: None,
     })
 }
 
@@ -84,6 +90,9 @@ pub enum HandshakeFragment {
     NeighborInfo(crate::domain::config::NeighborInfoSettings),
     StoreForward(crate::domain::config::StoreForwardSettings),
     Security(crate::domain::config::SecuritySettings),
+    ExtNotif(crate::domain::config::ExternalNotificationSettings),
+    Canned(crate::domain::config::CannedMessageSettings),
+    RangeTest(crate::domain::config::RangeTestSettings),
     ConfigComplete { id: ConfigId },
     Message(TextMessage),
     MessageStateChanged { id: PacketId, state: DeliveryState },
@@ -130,6 +139,9 @@ fn apply_handshake(mut acc: HandshakeAcc, event: HandshakeFragment) -> SessionSt
         HandshakeFragment::NeighborInfo(settings) => acc.neighbor_info = Some(settings),
         HandshakeFragment::StoreForward(settings) => acc.store_forward = Some(settings),
         HandshakeFragment::Security(settings) => acc.security = Some(settings),
+        HandshakeFragment::ExtNotif(settings) => acc.ext_notif = Some(settings),
+        HandshakeFragment::Canned(settings) => acc.canned = Some(settings),
+        HandshakeFragment::RangeTest(settings) => acc.range_test = Some(settings),
         HandshakeFragment::ConfigComplete { id } => return finalise_handshake(acc, id),
         HandshakeFragment::Message(_)
         | HandshakeFragment::MessageStateChanged { .. }
@@ -171,6 +183,9 @@ fn finalise_handshake(acc: HandshakeAcc, id: ConfigId) -> SessionState {
         neighbor_info: acc.neighbor_info,
         store_forward: acc.store_forward,
         security: acc.security,
+        ext_notif: acc.ext_notif,
+        canned: acc.canned,
+        range_test: acc.range_test,
         stats: crate::domain::stats::MeshStats::default(),
     })
 }
@@ -226,6 +241,18 @@ fn apply_ready(mut snap: DeviceSnapshot, event: HandshakeFragment) -> SessionSta
         }
         HandshakeFragment::Security(settings) => {
             snap.security = Some(settings);
+            SessionState::Ready(snap)
+        }
+        HandshakeFragment::ExtNotif(settings) => {
+            snap.ext_notif = Some(settings);
+            SessionState::Ready(snap)
+        }
+        HandshakeFragment::Canned(settings) => {
+            snap.canned = Some(settings);
+            SessionState::Ready(snap)
+        }
+        HandshakeFragment::RangeTest(settings) => {
+            snap.range_test = Some(settings);
             SessionState::Ready(snap)
         }
         HandshakeFragment::Node(node) => {

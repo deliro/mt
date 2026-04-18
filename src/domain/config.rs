@@ -197,6 +197,61 @@ pub struct SecuritySettings {
     pub console: ConsoleAccess,
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ExternalNotificationSettings {
+    pub enabled: bool,
+    pub output_ms: u32,
+    pub nag_timeout_secs: u32,
+    pub outputs: ExtNotifOutputs,
+    pub alerts: ExtNotifAlerts,
+    pub sound: ExtNotifSound,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ExtNotifOutputs {
+    pub output_pin: u32,
+    pub output_vibra_pin: u32,
+    pub output_buzzer_pin: u32,
+    pub active_high: bool,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ExtNotifAlerts {
+    pub message: ExtNotifTargets,
+    pub bell: ExtNotifTargets,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ExtNotifTargets {
+    pub led: bool,
+    pub vibra: bool,
+    pub buzzer: bool,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ExtNotifSound {
+    pub use_pwm: bool,
+    pub use_i2s_as_buzzer: bool,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct CannedMessageSettings {
+    pub rotary1_enabled: bool,
+    pub updown1_enabled: bool,
+    pub send_bell: bool,
+    pub rotary_pin_a: u32,
+    pub rotary_pin_b: u32,
+    pub rotary_pin_press: u32,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct RangeTestSettings {
+    pub enabled: bool,
+    pub sender_secs: u32,
+    pub save: bool,
+    pub clear_on_reboot: bool,
+}
+
 impl std::fmt::Debug for SecuritySettings {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SecuritySettings")

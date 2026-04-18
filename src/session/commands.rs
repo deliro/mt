@@ -1,7 +1,8 @@
 use crate::domain::channel::Channel;
 use crate::domain::config::{
-    BluetoothSettings, DeviceSettings, DisplaySettings, LoraSettings, MqttSettings,
-    NeighborInfoSettings, NetworkSettings, PositionSettings, PowerSettings, SecuritySettings,
+    BluetoothSettings, CannedMessageSettings, DeviceSettings, DisplaySettings,
+    ExternalNotificationSettings, LoraSettings, MqttSettings, NeighborInfoSettings,
+    NetworkSettings, PositionSettings, PowerSettings, RangeTestSettings, SecuritySettings,
     StoreForwardSettings, TelemetrySettings,
 };
 use crate::domain::ids::{ChannelIndex, PacketId};
@@ -27,6 +28,9 @@ pub enum Command {
     SetNeighborInfo(NeighborInfoSettings),
     SetStoreForward(StoreForwardSettings),
     SetSecurity(SecuritySettings),
+    SetExtNotif(ExternalNotificationSettings),
+    SetCanned(CannedMessageSettings),
+    SetRangeTest(RangeTestSettings),
     SetFixedPosition { latitude_deg: f64, longitude_deg: f64, altitude_m: i32 },
     RemoveFixedPosition,
     Admin(AdminAction),

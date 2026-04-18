@@ -132,6 +132,9 @@ impl App {
             Event::NeighborInfoUpdated(s) => self.state.snapshot.neighbor_info = Some(s),
             Event::StoreForwardUpdated(s) => self.state.snapshot.store_forward = Some(s),
             Event::SecurityUpdated(s) => self.state.snapshot.security = Some(s),
+            Event::ExtNotifUpdated(s) => self.state.snapshot.ext_notif = Some(s),
+            Event::CannedUpdated(s) => self.state.snapshot.canned = Some(s),
+            Event::RangeTestUpdated(s) => self.state.snapshot.range_test = Some(s),
             Event::StatsUpdated(stats) => self.state.snapshot.stats.merge(&stats),
             Event::TracerouteResult(result) => {
                 let target = result.target;
@@ -312,6 +315,9 @@ const fn is_activity(ev: &Event) -> bool {
             | Event::NeighborInfoUpdated(_)
             | Event::StoreForwardUpdated(_)
             | Event::SecurityUpdated(_)
+            | Event::ExtNotifUpdated(_)
+            | Event::CannedUpdated(_)
+            | Event::RangeTestUpdated(_)
             | Event::StatsUpdated(_)
             | Event::TracerouteResult(_)
             | Event::TracerouteFailed { .. }

@@ -6,10 +6,11 @@ use eframe::egui;
 use tokio::sync::mpsc;
 
 use crate::domain::config::{
-    BluetoothSettings, CLOCK_CHOICES, DEVICE_ROLE_CHOICES, DISPLAY_UNITS_CHOICES, DeviceSettings,
-    DisplaySettings, GPS_MODE_CHOICES, LoraSettings, MODEM_PRESET_CHOICES, MqttSettings,
-    NeighborInfoSettings, NetworkSettings, ORIENTATION_CHOICES, PAIRING_MODE_CHOICES,
-    PositionSettings, PowerSettings, REBROADCAST_CHOICES, REGION_CHOICES, SecuritySettings,
+    BluetoothSettings, CLOCK_CHOICES, CannedMessageSettings, DEVICE_ROLE_CHOICES,
+    DISPLAY_UNITS_CHOICES, DeviceSettings, DisplaySettings, ExternalNotificationSettings,
+    GPS_MODE_CHOICES, LoraSettings, MODEM_PRESET_CHOICES, MqttSettings, NeighborInfoSettings,
+    NetworkSettings, ORIENTATION_CHOICES, PAIRING_MODE_CHOICES, PositionSettings, PowerSettings,
+    REBROADCAST_CHOICES, REGION_CHOICES, RangeTestSettings, SecuritySettings,
     StoreForwardSettings, TelemetrySettings, clock_label, device_role_label, display_units_label,
     gps_mode_label, modem_preset_label, orientation_label, pairing_mode_label, rebroadcast_label,
     region_label,
@@ -32,6 +33,9 @@ pub enum Section {
     NeighborInfo,
     StoreForward,
     Security,
+    ExtNotif,
+    Canned,
+    RangeTest,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -73,6 +77,9 @@ pub struct Draft {
     pub neighbor_info: NeighborInfoSettings,
     pub store_forward: StoreForwardSettings,
     pub security: SecuritySettings,
+    pub ext_notif: ExternalNotificationSettings,
+    pub canned: CannedMessageSettings,
+    pub range_test: RangeTestSettings,
 }
 
 #[derive(Default, Clone)]
@@ -118,6 +125,9 @@ fn sections(ui: &mut egui::Ui, s: &mut SettingsUi, cmd: &mpsc::UnboundedSender<C
     collapsible(ui, "Neighbor Info", |ui| neighbor_info_section(ui, s, cmd));
     collapsible(ui, "Store & Forward", |ui| store_forward_section(ui, s, cmd));
     collapsible(ui, "Security", |ui| security_section(ui, s, cmd));
+    collapsible(ui, "External Notification", |ui| ext_notif_section(ui, s, cmd));
+    collapsible(ui, "Canned Messages", |ui| canned_section(ui, s, cmd));
+    collapsible(ui, "Range Test", |ui| range_test_section(ui, s, cmd));
     collapsible(ui, "Admin", |ui| admin_section(ui, s));
     collapsible(ui, "Storage", |ui| storage_section(ui, s));
     admin_confirm_modal(ui.ctx(), s, cmd);
@@ -1281,6 +1291,221 @@ fn shorten(s: &str, take: usize) -> String {
     out
 }
 
+// ---- External Notification ----
+
+fn ext_notif_section(
+    ui: &mut egui::Ui,
+    s: &mut SettingsUi,
+    cmd: &mpsc::UnboundedSender<Command>,
+) {
+    let mut dirty = s.dirty.is(Section::ExtNotif);
+    checkbox(
+        ui,
+        "Enabled",
+        &mut s.draft.ext_notif.enabled,
+        &mut dirty,
+        "Run the external notification module — drives an LED / vibra / buzzer pin on incoming messages.",
+    );
+    ext_notif_timing(ui, s, &mut dirty);
+    ui.separator();
+    ui.label(egui::RichText::new("Output pins (board-specific)").strong());
+    ext_notif_outputs(ui, s, &mut dirty);
+    ui.separator();
+    ui.label(egui::RichText::new("Alerts").strong());
+    ext_notif_alerts(ui, s, &mut dirty);
+    ui.separator();
+    ui.label(egui::RichText::new("Sound").strong());
+    ext_notif_sound(ui, s, &mut dirty);
+    commit(
+        s,
+        Section::ExtNotif,
+        dirty,
+        ui,
+        "Save External Notification",
+        cmd,
+        |d| Command::SetExtNotif(d.ext_notif.clone()),
+    );
+}
+
+fn ext_notif_timing(ui: &mut egui::Ui, s: &mut SettingsUi, dirty: &mut bool) {
+    u32_drag(
+        ui,
+        "Output on (ms)",
+        &mut s.draft.ext_notif.output_ms,
+        0..=60_000,
+        dirty,
+        "How long the output stays active per alert. Default 1000 ms.",
+    );
+    u32_drag(
+        ui,
+        "Nag timeout (s)",
+        &mut s.draft.ext_notif.nag_timeout_secs,
+        0..=3_600,
+        dirty,
+        "Keep pulsing until acknowledged for this many seconds. 0 = only one pulse.",
+    );
+}
+
+fn ext_notif_outputs(ui: &mut egui::Ui, s: &mut SettingsUi, dirty: &mut bool) {
+    u32_drag(
+        ui,
+        "LED pin",
+        &mut s.draft.ext_notif.outputs.output_pin,
+        0..=64,
+        dirty,
+        "GPIO that drives the status LED. 0 = use the board's default.",
+    );
+    u32_drag(
+        ui,
+        "Vibra pin",
+        &mut s.draft.ext_notif.outputs.output_vibra_pin,
+        0..=64,
+        dirty,
+        "GPIO for an optional vibration motor. 0 = unused.",
+    );
+    u32_drag(
+        ui,
+        "Buzzer pin",
+        &mut s.draft.ext_notif.outputs.output_buzzer_pin,
+        0..=64,
+        dirty,
+        "GPIO for an optional active buzzer. 0 = unused.",
+    );
+    checkbox(
+        ui,
+        "Active-high output",
+        &mut s.draft.ext_notif.outputs.active_high,
+        dirty,
+        "If on, the LED pin goes HIGH when alerting. Off = LOW.",
+    );
+}
+
+fn ext_notif_alerts(ui: &mut egui::Ui, s: &mut SettingsUi, dirty: &mut bool) {
+    checkbox(ui, "On message: LED", &mut s.draft.ext_notif.alerts.message.led, dirty, "Pulse the LED when a text message arrives.");
+    checkbox(ui, "On message: vibra", &mut s.draft.ext_notif.alerts.message.vibra, dirty, "Pulse the vibration motor on new text messages.");
+    checkbox(ui, "On message: buzzer", &mut s.draft.ext_notif.alerts.message.buzzer, dirty, "Beep the buzzer on new text messages.");
+    checkbox(ui, "On bell: LED", &mut s.draft.ext_notif.alerts.bell.led, dirty, "Pulse the LED when a bell character (\\x07) arrives — used by Canned Messages with 'send bell'.");
+    checkbox(ui, "On bell: vibra", &mut s.draft.ext_notif.alerts.bell.vibra, dirty, "Pulse the vibra on bell characters.");
+    checkbox(ui, "On bell: buzzer", &mut s.draft.ext_notif.alerts.bell.buzzer, dirty, "Beep the buzzer on bell characters.");
+}
+
+fn ext_notif_sound(ui: &mut egui::Ui, s: &mut SettingsUi, dirty: &mut bool) {
+    checkbox(
+        ui,
+        "Use PWM tone",
+        &mut s.draft.ext_notif.sound.use_pwm,
+        dirty,
+        "Drive the device.buzzer_gpio as a PWM tone instead of a simple on/off. Ignores the output_ms / active / pin fields above.",
+    );
+    checkbox(
+        ui,
+        "Use I²S speaker as buzzer",
+        &mut s.draft.ext_notif.sound.use_i2s_as_buzzer,
+        dirty,
+        "On boards with native audio (T-Watch S3, T-Deck) play RTTTL melodies over the speaker instead of driving a buzzer pin.",
+    );
+}
+
+// ---- Canned Messages ----
+
+fn canned_section(
+    ui: &mut egui::Ui,
+    s: &mut SettingsUi,
+    cmd: &mpsc::UnboundedSender<Command>,
+) {
+    let mut dirty = s.dirty.is(Section::Canned);
+    ui.label(egui::RichText::new(
+        "Input device for selecting pre-canned message presets on headless devices.",
+    ).weak());
+    checkbox(
+        ui,
+        "Rotary encoder",
+        &mut s.draft.canned.rotary1_enabled,
+        &mut dirty,
+        "Enable a dumb rotary encoder producing A/B pulses. Use with devices that have a knob and press button.",
+    );
+    checkbox(
+        ui,
+        "Up / Down buttons",
+        &mut s.draft.canned.updown1_enabled,
+        &mut dirty,
+        "Enable a 3-button up/down/select setup (e.g. RAK rotary encoder dev board or three buttons).",
+    );
+    checkbox(
+        ui,
+        "Send bell character",
+        &mut s.draft.canned.send_bell,
+        &mut dirty,
+        "Append a bell (\\x07) to outgoing canned messages — receiving nodes with External Notification 'on bell' will alert.",
+    );
+    ui.separator();
+    ui.label(egui::RichText::new("GPIO pins").strong());
+    u32_drag(ui, "Pin A", &mut s.draft.canned.rotary_pin_a, 0..=64, &mut dirty, "Rotary A signal.");
+    u32_drag(ui, "Pin B", &mut s.draft.canned.rotary_pin_b, 0..=64, &mut dirty, "Rotary B signal.");
+    u32_drag(ui, "Press pin", &mut s.draft.canned.rotary_pin_press, 0..=64, &mut dirty, "Encoder press-button pin.");
+    commit(
+        s,
+        Section::Canned,
+        dirty,
+        ui,
+        "Save Canned Messages",
+        cmd,
+        |d| Command::SetCanned(d.canned.clone()),
+    );
+}
+
+// ---- Range Test ----
+
+fn range_test_section(
+    ui: &mut egui::Ui,
+    s: &mut SettingsUi,
+    cmd: &mpsc::UnboundedSender<Command>,
+) {
+    let mut dirty = s.dirty.is(Section::RangeTest);
+    ui.colored_label(
+        egui::Color32::YELLOW,
+        "⚠ RangeTest burns airtime. Enable only for deliberate RF experiments.",
+    );
+    checkbox(
+        ui,
+        "Enabled",
+        &mut s.draft.range_test.enabled,
+        &mut dirty,
+        "Turn the range-test module on. No broadcasts happen until the 'Send every (s)' interval is non-zero.",
+    );
+    u32_drag(
+        ui,
+        "Send every (s)",
+        &mut s.draft.range_test.sender_secs,
+        0..=3_600,
+        &mut dirty,
+        "How often this node broadcasts a range-test packet. 0 = receive-only (this node logs incoming tests but doesn't transmit).",
+    );
+    checkbox(
+        ui,
+        "Save to CSV (ESP32)",
+        &mut s.draft.range_test.save,
+        &mut dirty,
+        "Log received tests to RangeTest.csv on the device's filesystem. ESP32 only.",
+    );
+    checkbox(
+        ui,
+        "Clear CSV on reboot",
+        &mut s.draft.range_test.clear_on_reboot,
+        &mut dirty,
+        "Wipe RangeTest.csv on every boot. Use for fresh test runs.",
+    );
+    commit(
+        s,
+        Section::RangeTest,
+        dirty,
+        ui,
+        "Save Range Test",
+        cmd,
+        |d| Command::SetRangeTest(d.range_test.clone()),
+    );
+}
+
 // ---- Commit helper ----
 
 fn commit(
@@ -1318,6 +1543,9 @@ const fn section_label(section: Section) -> &'static str {
         Section::NeighborInfo => "Neighbor Info",
         Section::StoreForward => "Store & Forward",
         Section::Security => "Security",
+        Section::ExtNotif => "External Notification",
+        Section::Canned => "Canned Messages",
+        Section::RangeTest => "Range Test",
     }
 }
 
@@ -1504,6 +1732,17 @@ fn sync_from_snapshot(snapshot: &DeviceSnapshot, s: &mut SettingsUi) {
         snapshot.security.as_ref(),
         &mut s.draft.security,
         s.dirty.is(Section::Security),
+    );
+    sync_section(
+        snapshot.ext_notif.as_ref(),
+        &mut s.draft.ext_notif,
+        s.dirty.is(Section::ExtNotif),
+    );
+    sync_section(snapshot.canned.as_ref(), &mut s.draft.canned, s.dirty.is(Section::Canned));
+    sync_section(
+        snapshot.range_test.as_ref(),
+        &mut s.draft.range_test,
+        s.dirty.is(Section::RangeTest),
     );
     if !s.dirty.is(Section::Position) {
         if let Some(pos) = snapshot.nodes.get(&snapshot.my_node).and_then(|n| n.position.as_ref()) {
