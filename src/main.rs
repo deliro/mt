@@ -32,6 +32,11 @@ fn main() -> eframe::Result<()> {
 
     let profiles = store.as_ref().and_then(|s| s.load_profiles().ok()).unwrap_or_default();
     let last_active_key = store.as_ref().and_then(|s| s.load_last_active().ok()).flatten();
+    let nodes_sort = store
+        .as_ref()
+        .and_then(|s| s.load_nodes_sort_json().ok().flatten())
+        .and_then(|blob| serde_json::from_str(&blob).ok())
+        .unwrap_or_default();
 
     let runtime = match tokio::runtime::Builder::new_multi_thread().enable_all().build() {
         Ok(rt) => Arc::new(rt),
@@ -74,7 +79,14 @@ fn main() -> eframe::Result<()> {
         NativeOptions::default(),
         Box::new(move |cc| {
             mt::ui::install_fonts(&cc.egui_ctx);
-            Ok(Box::new(App::new(profiles, last_active_key, cmd_tx, ev_rx, store)))
+            Ok(Box::new(App::new(
+                profiles,
+                last_active_key,
+                nodes_sort,
+                cmd_tx,
+                ev_rx,
+                store,
+            )))
         }),
     )
 }

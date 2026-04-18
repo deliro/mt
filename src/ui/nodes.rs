@@ -3,6 +3,7 @@ use std::time::{Duration, Instant, SystemTime};
 
 use eframe::egui;
 use egui_extras::{Column, TableBuilder};
+use serde::{Deserialize, Serialize};
 
 use crate::domain::ids::NodeId;
 use crate::domain::node::Node;
@@ -11,34 +12,42 @@ use crate::domain::snapshot::DeviceSnapshot;
 const FLASH_DURATION: Duration = Duration::from_millis(1500);
 const ONLINE_THRESHOLD: Duration = Duration::from_secs(2 * 60 * 60);
 
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Default)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum NodesSort {
-    #[default]
-    LastHeard,
     LongName,
     ShortName,
     Battery,
     Snr,
     Hops,
+    LastHeard,
 }
 
-impl NodesSort {
-    const fn label(self) -> &'static str {
-        match self {
-            Self::LastHeard => "Heard",
-            Self::LongName => "Long",
-            Self::ShortName => "Short",
-            Self::Battery => "Bat",
-            Self::Snr => "SNR",
-            Self::Hops => "Hops",
-        }
+impl Default for NodesSort {
+    fn default() -> Self {
+        Self::LongName
+    }
+}
+
+#[derive(Copy, Clone, Debug, Serialize, Deserialize, Default)]
+pub struct NodesSortPref {
+    pub by: NodesSort,
+    pub ascending: bool,
+}
+
+impl NodesSortPref {
+    pub fn default_for_column(by: NodesSort) -> Self {
+        // Ascending reads naturally for text columns (A→Z); for everything
+        // numeric / time-based most people expect "biggest first" when they
+        // click the column, so flip the default direction.
+        let ascending = matches!(by, NodesSort::LongName | NodesSort::ShortName);
+        Self { by, ascending }
     }
 }
 
 #[derive(Default)]
 pub struct NodesUi {
-    pub sort: NodesSort,
-    pub ascending: bool,
+    pub sort: NodesSortPref,
+    pub sort_dirty: bool,
     pub search: String,
     pub recently_updated: HashMap<NodeId, Instant>,
     pub seen_live: std::collections::HashSet<NodeId>,
@@ -77,7 +86,7 @@ pub fn render(
 
     let mut nodes: Vec<&Node> = filtered_nodes(snapshot, &nodes_ui.search);
     let counts = NodeCounts::compute(snapshot, nodes_ui, now_system);
-    sort_nodes(&mut nodes, nodes_ui.sort, nodes_ui.ascending);
+    sort_nodes(&mut nodes, nodes_ui.sort.by, nodes_ui.sort.ascending);
     nodes.sort_by_key(|n| !n.is_favorite);
 
     if nodes_ui.any_flashing(now_inst) {
@@ -185,37 +194,29 @@ fn toolbar(
         if !nodes_ui.search.is_empty() && resp.has_focus() && ui.small_button("clear").clicked() {
             nodes_ui.search.clear();
         }
-        ui.separator();
-        ui.label("Sort:");
-        for s in [
-            NodesSort::LastHeard,
-            NodesSort::LongName,
-            NodesSort::ShortName,
-            NodesSort::Battery,
-            NodesSort::Snr,
-            NodesSort::Hops,
-        ] {
-            if ui.selectable_label(nodes_ui.sort == s, s.label()).clicked() {
-                if nodes_ui.sort == s {
-                    nodes_ui.ascending = !nodes_ui.ascending;
-                } else {
-                    nodes_ui.sort = s;
-                    nodes_ui.ascending = matches!(s, NodesSort::LongName | NodesSort::ShortName);
-                }
-            }
-        }
-        ui.label(if nodes_ui.ascending { "asc" } else { "desc" });
     });
 }
 
 fn table(
     ui: &mut egui::Ui,
     nodes: &[&Node],
-    nodes_ui: &NodesUi,
+    nodes_ui: &mut NodesUi,
     detail_node: &mut Option<NodeId>,
     now_inst: Instant,
     now_system: SystemTime,
 ) {
+    let columns: &[(&str, Option<NodesSort>)] = &[
+        ("Long", Some(NodesSort::LongName)),
+        ("Short", Some(NodesSort::ShortName)),
+        ("Role", None),
+        ("Bat", Some(NodesSort::Battery)),
+        ("SNR", Some(NodesSort::Snr)),
+        ("Hops", Some(NodesSort::Hops)),
+        ("Heard", Some(NodesSort::LastHeard)),
+        ("Position", None),
+    ];
+    let mut clicked: Option<NodesSort> = None;
+    let current = nodes_ui.sort;
     TableBuilder::new(ui)
         .striped(true)
         .column(Column::auto().resizable(true))
@@ -226,10 +227,16 @@ fn table(
         .column(Column::auto())
         .column(Column::auto())
         .column(Column::remainder())
-        .header(20.0, |mut header| {
-            for h in ["Long", "Short", "Role", "Bat", "SNR", "Hops", "Heard", "Position"] {
+        .header(22.0, |mut header| {
+            for (label, sort_key) in columns {
                 header.col(|ui| {
-                    ui.strong(h);
+                    if let Some(key) = sort_key {
+                        if header_button(ui, label, *key, current).clicked() {
+                            clicked = Some(*key);
+                        }
+                    } else {
+                        ui.strong(*label);
+                    }
                 });
             }
         })
@@ -249,6 +256,35 @@ fn table(
                 body.row(18.0, |row| row_cells(row, node, &mut ctx));
             }
         });
+    if let Some(key) = clicked {
+        if nodes_ui.sort.by == key {
+            nodes_ui.sort.ascending = !nodes_ui.sort.ascending;
+        } else {
+            nodes_ui.sort = NodesSortPref::default_for_column(key);
+        }
+        nodes_ui.sort_dirty = true;
+    }
+}
+
+fn header_button(
+    ui: &mut egui::Ui,
+    label: &str,
+    key: NodesSort,
+    current: NodesSortPref,
+) -> egui::Response {
+    let is_active = current.by == key;
+    let arrow = if is_active {
+        if current.ascending { " ▲" } else { " ▼" }
+    } else {
+        ""
+    };
+    let text = egui::RichText::new(format!("{label}{arrow}")).strong();
+    ui.add(egui::Button::new(text).fill(egui::Color32::TRANSPARENT).frame(false))
+        .on_hover_text(if is_active {
+            "Click to reverse sort direction."
+        } else {
+            "Click to sort by this column."
+        })
 }
 
 struct RowContext<'a> {

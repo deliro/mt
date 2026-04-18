@@ -101,6 +101,7 @@ impl App {
     pub fn new(
         profiles: Vec<ConnectionProfile>,
         last_active_key: Option<String>,
+        nodes_sort: nodes::NodesSortPref,
         cmd_tx: mpsc::UnboundedSender<Command>,
         ev_rx: mpsc::Receiver<Event>,
         store: Option<HistoryStore>,
@@ -137,8 +138,14 @@ impl App {
         if let Some(profile) = pre_armed {
             reconnect.arm_from_startup(profile);
         }
+        let nodes_ui = nodes::NodesUi { sort: nodes_sort, ..nodes::NodesUi::default() };
         Self {
-            state: AppState { profiles, reconnect, ..AppState::default() },
+            state: AppState {
+                profiles,
+                nodes_ui,
+                reconnect,
+                ..AppState::default()
+            },
             cmd_tx,
             ev_rx,
             store,
@@ -457,6 +464,7 @@ impl eframe::App for App {
         self.drain_events();
         self.handle_shortcuts(ctx);
         self.flush_profiles_dirty();
+        self.flush_nodes_sort_dirty();
         self.render_reconnect(ctx);
         self.render_chrome(ctx);
         if !self.state.connected() {
@@ -490,6 +498,23 @@ impl App {
             warn!(%e, "persist profiles failed");
         }
         self.state.profiles_dirty = false;
+    }
+
+    fn flush_nodes_sort_dirty(&mut self) {
+        if !self.state.nodes_ui.sort_dirty {
+            return;
+        }
+        if let Some(store) = self.store.as_ref() {
+            match serde_json::to_string(&self.state.nodes_ui.sort) {
+                Ok(blob) => {
+                    if let Err(e) = store.save_nodes_sort_json(&blob) {
+                        warn!(%e, "persist nodes sort failed");
+                    }
+                }
+                Err(e) => warn!(%e, "serialize nodes sort failed"),
+            }
+        }
+        self.state.nodes_ui.sort_dirty = false;
     }
 
     fn render_reconnect(&mut self, ctx: &egui::Context) {
