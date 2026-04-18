@@ -9,6 +9,7 @@ use crate::domain::node::Node;
 use crate::domain::snapshot::DeviceSnapshot;
 
 const FLASH_DURATION: Duration = Duration::from_millis(1500);
+const ONLINE_THRESHOLD: Duration = Duration::from_secs(2 * 60 * 60);
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Default)]
 pub enum NodesSort {
@@ -74,7 +75,7 @@ pub fn render(
     let now_inst = Instant::now();
 
     let mut nodes: Vec<&Node> = filtered_nodes(snapshot, &nodes_ui.search);
-    let total = snapshot.nodes.len();
+    let counts = NodeCounts::compute(snapshot, nodes_ui, now_system);
     sort_nodes(&mut nodes, nodes_ui.sort, nodes_ui.ascending);
     nodes.sort_by_key(|n| !n.is_favorite);
 
@@ -82,7 +83,7 @@ pub fn render(
         ui.ctx().request_repaint_after(Duration::from_millis(16));
     }
 
-    toolbar(ui, nodes_ui, nodes.len(), total);
+    toolbar(ui, nodes_ui, nodes.len(), counts);
     ui.separator();
     table(ui, &nodes, nodes_ui, detail_node, now_inst, now_system);
 }
@@ -103,13 +104,50 @@ fn filtered_nodes<'a>(snapshot: &'a DeviceSnapshot, query: &str) -> Vec<&'a Node
         .collect()
 }
 
-fn toolbar(ui: &mut egui::Ui, nodes_ui: &mut NodesUi, shown: usize, total: usize) {
+#[derive(Copy, Clone, Debug)]
+struct NodeCounts {
+    total: usize,
+    online: usize,
+    cached: usize,
+}
+
+impl NodeCounts {
+    fn compute(snapshot: &DeviceSnapshot, nodes_ui: &NodesUi, now: SystemTime) -> Self {
+        let total = snapshot.nodes.len();
+        let online = snapshot
+            .nodes
+            .values()
+            .filter(|n| {
+                n.last_heard
+                    .and_then(|t| now.duration_since(t).ok())
+                    .is_some_and(|d| d <= ONLINE_THRESHOLD)
+            })
+            .count();
+        let cached = snapshot
+            .nodes
+            .keys()
+            .filter(|id| !nodes_ui.seen_live.contains(id))
+            .count();
+        Self { total, online, cached }
+    }
+}
+
+fn toolbar(ui: &mut egui::Ui, nodes_ui: &mut NodesUi, shown: usize, counts: NodeCounts) {
     ui.horizontal(|ui| {
-        if shown == total {
-            ui.label(format!("{total} nodes"));
+        if shown == counts.total {
+            ui.label(format!("{} nodes", counts.total));
         } else {
-            ui.label(format!("{shown}/{total}"));
+            ui.label(format!("{shown}/{}", counts.total));
         }
+        ui.colored_label(
+            egui::Color32::from_rgb(120, 200, 120),
+            format!("● {} online", counts.online),
+        )
+        .on_hover_text("Nodes heard on the mesh within the last 2 hours.");
+        ui.colored_label(egui::Color32::GRAY, format!("◌ {} cached", counts.cached))
+            .on_hover_text(
+                "Nodes known only from the local database — not observed live this session.",
+            );
         ui.separator();
         ui.label("Search:");
         let resp = ui.add(
