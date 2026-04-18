@@ -56,9 +56,13 @@ impl HistoryStore {
                 longitude     REAL,
                 altitude      INTEGER,
                 saved_at_ms   INTEGER NOT NULL,
+                is_favorite   INTEGER NOT NULL DEFAULT 0,
+                is_ignored    INTEGER NOT NULL DEFAULT 0,
                 PRIMARY KEY (my_node, node_id)
             );",
         )?;
+        add_column_if_missing(&conn, "nodes", "is_favorite", "INTEGER NOT NULL DEFAULT 0")?;
+        add_column_if_missing(&conn, "nodes", "is_ignored", "INTEGER NOT NULL DEFAULT 0")?;
         Ok(Self { conn })
     }
 
@@ -166,7 +170,8 @@ impl HistoryStore {
     pub fn load_nodes(&self, my_node: NodeId) -> Result<Vec<PersistedNode>, PersistError> {
         let mut stmt = self.conn.prepare(
             "SELECT node_id, long_name, short_name, role, battery, voltage, snr, rssi, \
-                    hops_away, last_heard_ms, latitude, longitude, altitude, saved_at_ms
+                    hops_away, last_heard_ms, latitude, longitude, altitude, saved_at_ms, \
+                    is_favorite, is_ignored
              FROM nodes
              WHERE my_node = ?
              ORDER BY saved_at_ms DESC",
@@ -188,6 +193,8 @@ impl HistoryStore {
                     longitude: row.get(11)?,
                     altitude: row.get(12)?,
                     saved_at_ms: row.get(13)?,
+                    is_favorite: row.get::<_, i64>(14)? != 0,
+                    is_ignored: row.get::<_, i64>(15)? != 0,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -208,8 +215,8 @@ impl HistoryStore {
         self.conn.execute(
             "INSERT INTO nodes (my_node, node_id, long_name, short_name, role, battery, voltage, \
                                 snr, rssi, hops_away, last_heard_ms, latitude, longitude, \
-                                altitude, saved_at_ms)
-             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                                altitude, saved_at_ms, is_favorite, is_ignored)
+             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
              ON CONFLICT(my_node, node_id) DO UPDATE SET
                 long_name     = excluded.long_name,
                 short_name    = excluded.short_name,
@@ -223,7 +230,9 @@ impl HistoryStore {
                 latitude      = COALESCE(excluded.latitude, nodes.latitude),
                 longitude     = COALESCE(excluded.longitude, nodes.longitude),
                 altitude      = COALESCE(excluded.altitude, nodes.altitude),
-                saved_at_ms   = excluded.saved_at_ms",
+                saved_at_ms   = excluded.saved_at_ms,
+                is_favorite   = excluded.is_favorite,
+                is_ignored    = excluded.is_ignored",
             params![
                 my_node.0,
                 node.id.0,
@@ -240,6 +249,8 @@ impl HistoryStore {
                 lon,
                 alt,
                 saved_at_ms,
+                i64::from(node.is_favorite),
+                i64::from(node.is_ignored),
             ],
         )?;
         Ok(())
@@ -261,6 +272,24 @@ impl HistoryStore {
         let rows = self.conn.execute("DELETE FROM nodes WHERE my_node = ?", [my_node.0])?;
         Ok(rows)
     }
+}
+
+fn add_column_if_missing(
+    conn: &Connection,
+    table: &str,
+    column: &str,
+    spec: &str,
+) -> Result<(), PersistError> {
+    let mut stmt = conn.prepare(&format!("PRAGMA table_info({table})"))?;
+    let exists: bool = stmt
+        .query_map([], |row| row.get::<_, String>(1))?
+        .filter_map(Result::ok)
+        .any(|name| name == column);
+    drop(stmt);
+    if !exists {
+        conn.execute(&format!("ALTER TABLE {table} ADD COLUMN {column} {spec}"), [])?;
+    }
+    Ok(())
 }
 
 pub fn default_path() -> PathBuf {
@@ -325,6 +354,8 @@ struct StoredNode {
     longitude: Option<f64>,
     altitude: Option<i32>,
     saved_at_ms: i64,
+    is_favorite: bool,
+    is_ignored: bool,
 }
 
 impl StoredNode {
@@ -354,6 +385,8 @@ impl StoredNode {
             hops_away: self.hops_away.and_then(|h| u8::try_from(h).ok()),
             last_heard,
             position,
+            is_favorite: self.is_favorite,
+            is_ignored: self.is_ignored,
         };
         PersistedNode { node, saved_at }
     }

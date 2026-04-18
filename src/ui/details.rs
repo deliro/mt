@@ -1,15 +1,18 @@
 use std::time::SystemTime;
 
 use eframe::egui;
+use tokio::sync::mpsc;
 
 use crate::domain::ids::NodeId;
 use crate::domain::node::Node;
 use crate::domain::snapshot::DeviceSnapshot;
+use crate::session::commands::Command;
 
 pub fn render_overlay(
     ctx: &egui::Context,
     snapshot: &DeviceSnapshot,
     detail_node: &mut Option<NodeId>,
+    cmd: &mpsc::UnboundedSender<Command>,
 ) {
     let Some(id) = *detail_node else { return };
     let mut open = true;
@@ -17,9 +20,16 @@ pub fn render_overlay(
         .nodes
         .get(&id)
         .map_or_else(|| format!("!{:08x}", id.0), display_name);
+    let is_self = id == snapshot.my_node;
     egui::Window::new(title).open(&mut open).collapsible(false).resizable(false).show(ctx, |ui| {
         match snapshot.nodes.get(&id) {
-            Some(node) => render_body(ui, node),
+            Some(node) => {
+                render_body(ui, node);
+                if !is_self {
+                    ui.separator();
+                    render_actions(ui, node, cmd);
+                }
+            }
             None => {
                 ui.label(format!("No data yet for !{:08x}", id.0));
             }
@@ -28,6 +38,37 @@ pub fn render_overlay(
     if !open {
         *detail_node = None;
     }
+}
+
+fn render_actions(ui: &mut egui::Ui, node: &Node, cmd: &mpsc::UnboundedSender<Command>) {
+    ui.horizontal(|ui| {
+        let fav_label = if node.is_favorite { "★ Unfavorite" } else { "☆ Favorite" };
+        if ui
+            .button(fav_label)
+            .on_hover_text(
+                "Pin this node on the device's NodeDB so it sticks around even when crowded.",
+            )
+            .clicked()
+        {
+            let _ = cmd.send(Command::SetFavorite { node: node.id, favorite: !node.is_favorite });
+        }
+        let ign_label = if node.is_ignored { "Unignore" } else { "Ignore" };
+        let ign_btn = if node.is_ignored {
+            egui::Button::new(ign_label)
+        } else {
+            egui::Button::new(ign_label).fill(egui::Color32::from_rgb(90, 30, 30))
+        };
+        if ui
+            .add(ign_btn)
+            .on_hover_text(
+                "Tell the device to drop packets from this node. Reversible. Useful for noisy or \
+                 spammy stations.",
+            )
+            .clicked()
+        {
+            let _ = cmd.send(Command::SetIgnored { node: node.id, ignored: !node.is_ignored });
+        }
+    });
 }
 
 fn render_body(ui: &mut egui::Ui, node: &Node) {
@@ -40,6 +81,15 @@ fn render_body(ui: &mut egui::Ui, node: &Node) {
             row(ui, "Long name", non_empty_or(&node.long_name, "—"));
             row(ui, "Short name", non_empty_or(&node.short_name, "—"));
             row(ui, "Role", format!("{:?}", node.role));
+            let mut flags = Vec::new();
+            if node.is_favorite {
+                flags.push("favorite");
+            }
+            if node.is_ignored {
+                flags.push("ignored");
+            }
+            let flags_label = if flags.is_empty() { "—".to_owned() } else { flags.join(", ") };
+            row(ui, "Flags", flags_label);
             row(ui, "Battery", node.battery_level.map_or_else(|| "—".to_owned(), |b| format!("{b}%")));
             row(ui, "Voltage", node.voltage_v.map_or_else(|| "—".to_owned(), |v| format!("{v:.2} V")));
             row(ui, "SNR", node.snr_db.map_or_else(|| "—".to_owned(), |s| format!("{s:.1} dB")));

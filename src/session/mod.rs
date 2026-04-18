@@ -88,7 +88,9 @@ impl DeviceSession {
                 | Command::SetBluetooth(_)
                 | Command::SetFixedPosition { .. }
                 | Command::RemoveFixedPosition
-                | Command::Admin(_) => {}
+                | Command::Admin(_)
+                | Command::SetFavorite { .. }
+                | Command::SetIgnored { .. } => {}
             }
         }
     }
@@ -149,7 +151,9 @@ async fn open_with_cancel(
                     | Command::SetBluetooth(_)
                     | Command::SetFixedPosition { .. }
                     | Command::RemoveFixedPosition
-                    | Command::Admin(_),
+                    | Command::Admin(_)
+                    | Command::SetFavorite { .. }
+                    | Command::SetIgnored { .. },
                 ) => {
                     debug!("ignoring command while connecting");
                 }
@@ -427,6 +431,12 @@ async fn handle_config_command(
         }
         Command::RemoveFixedPosition => send_remove_fixed_position(sink, my_node).await,
         Command::Admin(action) => send_admin_action(sink, my_node, action).await,
+        Command::SetFavorite { node, favorite } => {
+            send_favorite(sink, my_node, node, favorite).await
+        }
+        Command::SetIgnored { node, ignored } => {
+            send_ignored(sink, my_node, node, ignored).await
+        }
         Command::Connect(_)
         | Command::Disconnect
         | Command::SendText { .. }
@@ -604,6 +614,44 @@ async fn send_remove_fixed_position(
         payload_variant: Some(meshtastic::admin_message::PayloadVariant::RemoveFixedPosition(
             true,
         )),
+        ..Default::default()
+    };
+    send_admin(sink, my_node, admin).await
+}
+
+async fn send_favorite(
+    sink: &mut Pin<Box<impl futures::Sink<Vec<u8>, Error = crate::transport::TransportError> + ?Sized>>,
+    my_node: NodeId,
+    node: NodeId,
+    favorite: bool,
+) -> Result<(), ConnectError> {
+    use meshtastic::admin_message::PayloadVariant;
+    let variant = if favorite {
+        PayloadVariant::SetFavoriteNode(node.0)
+    } else {
+        PayloadVariant::RemoveFavoriteNode(node.0)
+    };
+    let admin = meshtastic::AdminMessage {
+        payload_variant: Some(variant),
+        ..Default::default()
+    };
+    send_admin(sink, my_node, admin).await
+}
+
+async fn send_ignored(
+    sink: &mut Pin<Box<impl futures::Sink<Vec<u8>, Error = crate::transport::TransportError> + ?Sized>>,
+    my_node: NodeId,
+    node: NodeId,
+    ignored: bool,
+) -> Result<(), ConnectError> {
+    use meshtastic::admin_message::PayloadVariant;
+    let variant = if ignored {
+        PayloadVariant::SetIgnoredNode(node.0)
+    } else {
+        PayloadVariant::RemoveIgnoredNode(node.0)
+    };
+    let admin = meshtastic::AdminMessage {
+        payload_variant: Some(variant),
         ..Default::default()
     };
     send_admin(sink, my_node, admin).await

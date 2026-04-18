@@ -20,6 +20,8 @@ fn node(id: u32, name: &str) -> Node {
         hops_away: None,
         last_heard: None,
         position: None,
+        is_favorite: false,
+        is_ignored: false,
     }
 }
 

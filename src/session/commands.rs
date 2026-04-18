@@ -23,6 +23,8 @@ pub enum Command {
     SetFixedPosition { latitude_deg: f64, longitude_deg: f64, altitude_m: i32 },
     RemoveFixedPosition,
     Admin(AdminAction),
+    SetFavorite { node: crate::domain::ids::NodeId, favorite: bool },
+    SetIgnored { node: crate::domain::ids::NodeId, ignored: bool },
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]

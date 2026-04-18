@@ -76,6 +76,7 @@ pub fn render(
     let mut nodes: Vec<&Node> = filtered_nodes(snapshot, &nodes_ui.search);
     let total = snapshot.nodes.len();
     sort_nodes(&mut nodes, nodes_ui.sort, nodes_ui.ascending);
+    nodes.sort_by_key(|n| !n.is_favorite);
 
     if nodes_ui.any_flashing(now_inst) {
         ui.ctx().request_repaint_after(Duration::from_millis(16));
@@ -205,13 +206,16 @@ fn row_cells_inner(
     let flash = ctx.flash;
     row.col(|ui| {
         paint_flash(ui, flash);
-        let name = display_name(node);
-        let label = if ctx.is_cached {
-            egui::Label::new(egui::RichText::new(name).weak())
-        } else {
-            egui::Label::new(name)
-        };
-        if ui.add(label.sense(egui::Sense::click())).clicked() {
+        let raw_name = display_name(node);
+        let display = if node.is_favorite { format!("★ {raw_name}") } else { raw_name };
+        let mut text = egui::RichText::new(display);
+        if ctx.is_cached {
+            text = text.weak();
+        }
+        if node.is_ignored {
+            text = text.strikethrough();
+        }
+        if ui.add(egui::Label::new(text).sense(egui::Sense::click())).clicked() {
             *ctx.detail_node = Some(node.id);
         }
     });

@@ -40,4 +40,6 @@ pub struct Node {
     pub hops_away: Option<u8>,
     pub last_heard: Option<SystemTime>,
     pub position: Option<Position>,
+    pub is_favorite: bool,
+    pub is_ignored: bool,
 }

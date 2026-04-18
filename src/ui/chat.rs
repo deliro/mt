@@ -23,9 +23,6 @@ pub fn render_messages(ui: &mut egui::Ui, state: &mut AppState) {
     message_list(ui, state, active);
 }
 
-pub fn render_overlay(ctx: &egui::Context, state: &mut AppState) {
-    crate::ui::details::render_overlay(ctx, &state.snapshot, &mut state.detail_node);
-}
 
 pub fn render_composer(
     ui: &mut egui::Ui,

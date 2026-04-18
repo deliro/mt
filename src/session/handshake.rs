@@ -100,6 +100,8 @@ pub fn node_from_proto(ni: &meshtastic::NodeInfo) -> Node {
             longitude_deg: p.longitude_i() as f64 * 1e-7,
             altitude_m: Some(p.altitude()),
         }),
+        is_favorite: ni.is_favorite,
+        is_ignored: ni.is_ignored,
     }
 }
 

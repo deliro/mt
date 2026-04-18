@@ -323,7 +323,12 @@ impl eframe::App for App {
                 }
             }
         }
-        details::render_overlay(ctx, &self.state.snapshot, &mut self.state.detail_node);
+        details::render_overlay(
+            ctx,
+            &self.state.snapshot,
+            &mut self.state.detail_node,
+            &self.cmd_tx,
+        );
         ctx.request_repaint_after(std::time::Duration::from_millis(100));
     }
 }

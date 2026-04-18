@@ -60,7 +60,7 @@ fn device_snapshot_upserts_channels() {
 
 #[test]
 fn node_and_profile_compose_without_leaking_proto() {
-    let _ = Node {
+    let _: Node = Node {
         id: NodeId(1),
         long_name: "n".into(),
         short_name: "n".into(),
@@ -72,6 +72,8 @@ fn node_and_profile_compose_without_leaking_proto() {
         hops_away: None,
         last_heard: None,
         position: None,
+        is_favorite: false,
+        is_ignored: false,
     };
     let _ = ConnectionProfile::Ble { name: "r".into(), address: BleAddress::new("AA:BB") };
     let _ = ConnectionProfile::Serial { name: "s".into(), path: PathBuf::from("/dev/ttyUSB0") };

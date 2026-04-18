@@ -37,6 +37,8 @@ fn sample_node(id: u32, name: &str, last_heard: Option<SystemTime>) -> Node {
             longitude_deg: 17.102,
             altitude_m: Some(217),
         }),
+        is_favorite: false,
+        is_ignored: false,
     }
 }
 
