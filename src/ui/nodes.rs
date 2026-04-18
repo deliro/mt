@@ -144,7 +144,7 @@ fn toolbar(ui: &mut egui::Ui, nodes_ui: &mut NodesUi, shown: usize, counts: Node
             format!("● {} online", counts.online),
         )
         .on_hover_text("Nodes heard on the mesh within the last 2 hours.");
-        ui.colored_label(egui::Color32::GRAY, format!("◌ {} cached", counts.cached))
+        ui.colored_label(egui::Color32::GRAY, format!("○ {} cached", counts.cached))
             .on_hover_text(
                 "Nodes known only from the local database — not observed live this session.",
             );
@@ -253,41 +253,44 @@ fn row_cells_inner(
         if node.is_ignored {
             text = text.strikethrough();
         }
-        if ui.add(egui::Label::new(text).sense(egui::Sense::click())).clicked() {
+        let resp = ui.add(
+            egui::Label::new(text)
+                .truncate()
+                .sense(egui::Sense::click()),
+        );
+        if resp.clicked() {
             *ctx.detail_node = Some(node.id);
         }
+        resp.on_hover_text(display_name(node));
     });
-    row.col(|ui| {
-        paint_flash(ui, flash);
-        ui.label(&node.short_name);
-    });
-    row.col(|ui| {
-        paint_flash(ui, flash);
-        ui.label(format!("{:?}", node.role));
-    });
-    row.col(|ui| {
-        paint_flash(ui, flash);
-        ui.label(node.battery_level.map_or_else(|| "—".into(), |b| format!("{b}%")));
-    });
-    row.col(|ui| {
-        paint_flash(ui, flash);
-        ui.label(node.snr_db.map_or_else(|| "—".into(), |s| format!("{s:.1}")));
-    });
-    row.col(|ui| {
-        paint_flash(ui, flash);
-        ui.label(node.hops_away.map_or_else(|| "—".into(), |h| format!("{h}")));
-    });
+    truncated_cell(&mut row, flash, node.short_name.clone());
+    truncated_cell(&mut row, flash, format!("{:?}", node.role));
+    truncated_cell(
+        &mut row,
+        flash,
+        node.battery_level.map_or_else(|| "—".into(), |b| format!("{b}%")),
+    );
+    truncated_cell(
+        &mut row,
+        flash,
+        node.snr_db.map_or_else(|| "—".into(), |s| format!("{s:.1}")),
+    );
+    truncated_cell(
+        &mut row,
+        flash,
+        node.hops_away.map_or_else(|| "—".into(), |h| format!("{h}")),
+    );
     row.col(|ui| {
         paint_flash(ui, flash);
         if ctx.is_cached {
             let primary = format_last_heard(node.last_heard, ctx.now_system);
             let cached_age = format_cached_age(ctx.cached_saved_at, ctx.now_system);
-            ui.colored_label(
-                egui::Color32::GRAY,
-                format!("{primary} (cached {cached_age})"),
-            );
+            let label = format!("{primary} (cached {cached_age})");
+            ui.add(egui::Label::new(egui::RichText::new(label).color(egui::Color32::GRAY)).truncate());
         } else {
-            ui.label(format_last_heard(node.last_heard, ctx.now_system));
+            ui.add(
+                egui::Label::new(format_last_heard(node.last_heard, ctx.now_system)).truncate(),
+            );
         }
     });
     row.col(|ui| {
@@ -296,7 +299,14 @@ fn row_cells_inner(
             || "—".into(),
             |p| format!("{:.4}, {:.4}", p.latitude_deg, p.longitude_deg),
         );
-        ui.label(pos);
+        ui.add(egui::Label::new(pos).truncate());
+    });
+}
+
+fn truncated_cell(row: &mut egui_extras::TableRow<'_, '_>, flash: Option<egui::Color32>, text: String) {
+    row.col(|ui| {
+        paint_flash(ui, flash);
+        ui.add(egui::Label::new(text).truncate());
     });
 }
 
