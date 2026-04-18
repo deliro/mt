@@ -34,4 +34,15 @@ impl ConnectionProfile {
             Self::Ble { name, .. } | Self::Serial { name, .. } | Self::Tcp { name, .. } => name,
         }
     }
+
+    /// Stable identifier derived from the transport's addressable field, used
+    /// to persist "last active" profile across restarts. The display `name`
+    /// is user-editable and not a reliable key.
+    pub fn key(&self) -> String {
+        match self {
+            Self::Ble { address, .. } => format!("ble:{}", address.as_str()),
+            Self::Serial { path, .. } => format!("serial:{}", path.display()),
+            Self::Tcp { host, port, .. } => format!("tcp:{host}:{port}"),
+        }
+    }
 }

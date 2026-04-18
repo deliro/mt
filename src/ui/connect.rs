@@ -38,6 +38,7 @@ pub fn render(
             ui.spinner();
             ui.label("Connecting…");
             if ui.button("Cancel").clicked() {
+                state.reconnect.mark_user_disconnect();
                 let _ = cmd.send(Command::Disconnect);
             }
         });
@@ -71,6 +72,7 @@ fn list_profiles(
         ui.horizontal(|ui| {
             ui.label(format!("[{:?}] {}", profile.kind(), profile.name()));
             if ui.add_enabled(!busy, egui::Button::new("Connect")).clicked() {
+                state.reconnect.mark_user_connect(profile);
                 let _ = cmd.send(Command::Connect(profile.clone()));
             }
             if ui.add_enabled(!busy, egui::Button::new("Delete")).clicked() {
@@ -82,7 +84,7 @@ fn list_profiles(
         && i < state.profiles.len()
     {
         let _ = state.profiles.remove(i);
-        if let Err(e) = save_to(profiles_path, &state.profiles) {
+        if let Err(e) = save_to(profiles_path, &state.profiles, state.reconnect.last_active.as_deref()) {
             state.last_error = Some(e.to_string());
         }
     }
@@ -144,7 +146,11 @@ fn add_dialog(ctx: &egui::Context, state: &mut AppState, profiles_path: &Path) {
     if save
         && let Some(profile) = build_profile(&state.connect_ui.add) {
             state.profiles.push(profile);
-            if let Err(e) = save_to(profiles_path, &state.profiles) {
+            if let Err(e) = save_to(
+                profiles_path,
+                &state.profiles,
+                state.reconnect.last_active.as_deref(),
+            ) {
                 state.last_error = Some(e.to_string());
             }
             close = true;

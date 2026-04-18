@@ -5,6 +5,7 @@ pub mod details;
 pub mod firmware;
 pub mod fonts;
 pub mod nodes;
+pub mod reconnect;
 pub mod remote_admin;
 pub mod scan;
 pub mod settings;
@@ -54,6 +55,7 @@ pub struct AppState {
     pub traceroutes: TracerouteUi,
     pub remote_admin: remote_admin::RemoteAdminUi,
     pub probed_nodes: std::collections::HashSet<NodeId>,
+    pub reconnect: reconnect::ReconnectUi,
 }
 
 #[derive(Default)]
@@ -88,13 +90,21 @@ pub struct App {
 impl App {
     pub fn new(
         profiles: Vec<ConnectionProfile>,
+        last_active_key: Option<String>,
         profiles_path: PathBuf,
         cmd_tx: mpsc::UnboundedSender<Command>,
         ev_rx: mpsc::Receiver<Event>,
         store: Option<HistoryStore>,
     ) -> Self {
+        let mut reconnect = reconnect::ReconnectUi::default();
+        if let Some(key) = last_active_key.as_ref()
+            && let Some(profile) = profiles.iter().find(|p| &p.key() == key).cloned()
+        {
+            reconnect.arm_from_startup(profile);
+        }
+        reconnect.last_active = last_active_key;
         Self {
-            state: AppState { profiles, ..AppState::default() },
+            state: AppState { profiles, reconnect, ..AppState::default() },
             cmd_tx,
             ev_rx,
             profiles_path,
@@ -152,6 +162,7 @@ impl App {
             Event::Disconnected => {
                 self.state.status = SessionStatus::Disconnected;
                 self.state.last_activity = None;
+                self.state.reconnect.on_disconnected();
             }
             Event::Error(msg) => {
                 self.state.last_error = Some(msg);
@@ -169,6 +180,23 @@ impl App {
         }
         snapshot.messages.sort_by_key(|m| m.received_at);
         self.state.snapshot = snapshot;
+        self.state.reconnect.on_connected();
+        self.persist_last_active();
+    }
+
+    fn persist_last_active(&mut self) {
+        let key = self.state.reconnect.profile.as_ref().map(crate::domain::profile::ConnectionProfile::key);
+        if key == self.state.reconnect.last_active {
+            return;
+        }
+        self.state.reconnect.last_active = key;
+        if let Err(e) = crate::persist::profiles::save_to(
+            &self.profiles_path,
+            &self.state.profiles,
+            self.state.reconnect.last_active.as_deref(),
+        ) {
+            warn!(%e, "persist last-active profile failed");
+        }
     }
 
     fn apply_node_updated(&mut self, node: crate::domain::node::Node) {
@@ -349,12 +377,34 @@ const fn is_activity(ev: &Event) -> bool {
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.drain_events();
+        let now = Instant::now();
+        let disconnected = matches!(self.state.status, SessionStatus::Disconnected);
+        let connecting = matches!(self.state.status, SessionStatus::Connecting);
+        let mut stop_reconnect = false;
+        reconnect::render_banner(
+            ctx,
+            &self.state.reconnect,
+            disconnected,
+            connecting,
+            now,
+            &mut stop_reconnect,
+        );
+        if stop_reconnect {
+            self.state.reconnect.cancel();
+        }
+        reconnect::tick(&mut self.state.reconnect, disconnected, now, &self.cmd_tx);
 
         egui::TopBottomPanel::top("status").show(ctx, |ui| status::render(ui, &self.state));
         if self.state.connected() {
             firmware::render_banner_if_old(ctx, &self.state.snapshot.firmware_version);
         }
-        scan::render(ctx, &mut self.state.scan_ui, &self.cmd_tx, &mut self.state.profiles);
+        scan::render(
+            ctx,
+            &mut self.state.scan_ui,
+            &self.cmd_tx,
+            &mut self.state.profiles,
+            &mut self.state.reconnect,
+        );
 
         if !self.state.connected() {
             egui::CentralPanel::default().show(ctx, |ui| {
@@ -365,6 +415,7 @@ impl eframe::App for App {
         }
         egui::SidePanel::left("sidebar").show(ctx, |ui| {
             if ui.button("Disconnect").clicked() {
+                self.state.reconnect.mark_user_disconnect();
                 let _ = self.cmd_tx.send(Command::Disconnect);
             }
             ui.separator();

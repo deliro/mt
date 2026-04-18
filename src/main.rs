@@ -24,7 +24,9 @@ fn main() -> eframe::Result<()> {
         .try_init();
 
     let profiles_path = default_path();
-    let profiles = load_from(&profiles_path).unwrap_or_default();
+    let stored = load_from(&profiles_path).unwrap_or_default();
+    let profiles = stored.profiles;
+    let last_active_key = stored.last_active;
     let store = match HistoryStore::open(&history_path()) {
         Ok(s) => Some(s),
         Err(e) => {
@@ -74,7 +76,14 @@ fn main() -> eframe::Result<()> {
         NativeOptions::default(),
         Box::new(move |cc| {
             mt::ui::install_fonts(&cc.egui_ctx);
-            Ok(Box::new(App::new(profiles, profiles_path, cmd_tx, ev_rx, store)))
+            Ok(Box::new(App::new(
+                profiles,
+                last_active_key,
+                profiles_path,
+                cmd_tx,
+                ev_rx,
+                store,
+            )))
         }),
     )
 }

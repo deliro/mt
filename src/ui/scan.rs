@@ -69,6 +69,7 @@ pub fn render(
     ui_state: &mut ScanUi,
     cmd: &mpsc::UnboundedSender<Command>,
     profiles: &mut Vec<ConnectionProfile>,
+    reconnect: &mut crate::ui::reconnect::ReconnectUi,
 ) {
     if !ui_state.open {
         return;
@@ -125,7 +126,9 @@ pub fn render(
         open(ui_state);
     }
     if let Some((name, addr)) = start_connect {
-        let _ = cmd.send(Command::Connect(ConnectionProfile::Ble { name, address: addr }));
+        let profile = ConnectionProfile::Ble { name, address: addr };
+        reconnect.mark_user_connect(&profile);
+        let _ = cmd.send(Command::Connect(profile));
         close = true;
     }
     if let Some((name, addr)) = save_profile {
