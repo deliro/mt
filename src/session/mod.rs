@@ -199,6 +199,7 @@ struct InitAcc {
     nodes: std::collections::HashMap<NodeId, Node>,
     channels: Vec<Channel>,
     lora: Option<crate::domain::config::LoraSettings>,
+    messages: Vec<TextMessage>,
 }
 
 impl InitAcc {
@@ -214,8 +215,8 @@ impl InitAcc {
                 None => self.channels.push(ch),
             },
             HandshakeFragment::Lora(settings) => self.lora = Some(settings),
+            HandshakeFragment::Message(msg) => self.messages.push(msg),
             HandshakeFragment::ConfigComplete { .. }
-            | HandshakeFragment::Message(_)
             | HandshakeFragment::MessageStateChanged { .. }
             | HandshakeFragment::NodeMetric { .. } => {}
         }
@@ -234,7 +235,7 @@ impl InitAcc {
             firmware_version: self.firmware,
             nodes: self.nodes,
             channels: self.channels,
-            messages: Vec::new(),
+            messages: self.messages,
             lora: self.lora,
         }
     }

@@ -5,6 +5,7 @@ use std::sync::Arc;
 use eframe::NativeOptions;
 use futures::FutureExt;
 use mt::domain::profile::{ConnectionProfile, TransportKind};
+use mt::persist::messages::{MessageStore, default_path as messages_path};
 use mt::persist::profiles::{default_path, load_from};
 use mt::session::commands::Command;
 use mt::session::{DeviceSession, Event};
@@ -20,6 +21,13 @@ fn main() -> eframe::Result<()> {
 
     let profiles_path = default_path();
     let profiles = load_from(&profiles_path).unwrap_or_default();
+    let store = match MessageStore::open(&messages_path()) {
+        Ok(s) => Some(s),
+        Err(e) => {
+            tracing::warn!(%e, "failed to open message history; running without persistence");
+            None
+        }
+    };
 
     let runtime = match tokio::runtime::Builder::new_multi_thread().enable_all().build() {
         Ok(rt) => Arc::new(rt),
@@ -60,6 +68,8 @@ fn main() -> eframe::Result<()> {
     eframe::run_native(
         "Meshtastic",
         NativeOptions::default(),
-        Box::new(move |_cc| Ok(Box::new(App::new(profiles, profiles_path, cmd_tx, ev_rx)))),
+        Box::new(move |_cc| {
+            Ok(Box::new(App::new(profiles, profiles_path, cmd_tx, ev_rx, store)))
+        }),
     )
 }

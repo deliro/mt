@@ -2,10 +2,12 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::domain::channel::{Channel, ChannelRole};
 use crate::domain::config::LoraSettings;
-use crate::domain::ids::{ChannelIndex, ConfigId, NodeId};
+use crate::domain::ids::{BROADCAST_NODE, ChannelIndex, ConfigId, NodeId, PacketId};
+use crate::domain::message::{DeliveryState, Direction, Recipient, TextMessage};
 use crate::domain::node::{Node, NodeRole, Position};
 use crate::domain::session::HandshakeFragment;
 use crate::proto::meshtastic;
+use crate::proto::port::{PortPayload, parse};
 
 pub fn fragments_from_radio(msg: meshtastic::FromRadio) -> Vec<HandshakeFragment> {
     use meshtastic::from_radio::PayloadVariant;
@@ -21,8 +23,8 @@ pub fn fragments_from_radio(msg: meshtastic::FromRadio) -> Vec<HandshakeFragment
         PayloadVariant::ConfigCompleteId(id) => {
             vec![HandshakeFragment::ConfigComplete { id: ConfigId(id) }]
         }
-        PayloadVariant::Packet(_)
-        | PayloadVariant::ModuleConfig(_)
+        PayloadVariant::Packet(p) => packet_fragments(p),
+        PayloadVariant::ModuleConfig(_)
         | PayloadVariant::Rebooted(_)
         | PayloadVariant::QueueStatus(_)
         | PayloadVariant::XmodemPacket(_)
@@ -31,6 +33,45 @@ pub fn fragments_from_radio(msg: meshtastic::FromRadio) -> Vec<HandshakeFragment
         | PayloadVariant::MqttClientProxyMessage(_)
         | PayloadVariant::ClientNotification(_)
         | PayloadVariant::DeviceuiConfig(_) => Vec::new(),
+    }
+}
+
+fn packet_fragments(p: meshtastic::MeshPacket) -> Vec<HandshakeFragment> {
+    use meshtastic::mesh_packet::PayloadVariant;
+    let Some(PayloadVariant::Decoded(data)) = p.payload_variant else { return Vec::new() };
+    let Ok(payload) = parse(data.portnum, &data.payload) else { return Vec::new() };
+    let channel = ChannelIndex::new(p.channel as u8).unwrap_or_else(ChannelIndex::primary);
+    match payload {
+        PortPayload::Text(text) => vec![HandshakeFragment::Message(TextMessage {
+            id: PacketId(p.id),
+            channel,
+            from: NodeId(p.from),
+            to: if p.to == BROADCAST_NODE.0 {
+                Recipient::Broadcast
+            } else {
+                Recipient::Node(NodeId(p.to))
+            },
+            text,
+            received_at: packet_time(p.rx_time),
+            direction: Direction::Incoming,
+            state: DeliveryState::Acked,
+        })],
+        PortPayload::Position(_)
+        | PortPayload::NodeInfo(_)
+        | PortPayload::Telemetry(_)
+        | PortPayload::Routing(_)
+        | PortPayload::Admin(_)
+        | PortPayload::Unknown { .. } => Vec::new(),
+    }
+}
+
+fn packet_time(rx_time_secs: u32) -> SystemTime {
+    if rx_time_secs == 0 {
+        SystemTime::now()
+    } else {
+        UNIX_EPOCH
+            .checked_add(Duration::from_secs(u64::from(rx_time_secs)))
+            .unwrap_or_else(SystemTime::now)
     }
 }
 

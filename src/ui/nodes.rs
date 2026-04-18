@@ -38,6 +38,7 @@ impl NodesSort {
 pub struct NodesUi {
     pub sort: NodesSort,
     pub ascending: bool,
+    pub search: String,
     pub recently_updated: HashMap<NodeId, Instant>,
 }
 
@@ -51,19 +52,16 @@ impl NodesUi {
             .get(&id)
             .and_then(|t| now.checked_duration_since(*t))
             .filter(|d| *d < FLASH_DURATION)
-            .map_or(0.0, |d| {
-                1.0 - d.as_secs_f32() / FLASH_DURATION.as_secs_f32()
-            })
+            .map_or(0.0, |d| 1.0 - d.as_secs_f32() / FLASH_DURATION.as_secs_f32())
     }
 
     fn any_flashing(&self, now: Instant) -> bool {
-        self.recently_updated.values().any(|t| {
-            now.checked_duration_since(*t).is_some_and(|d| d < FLASH_DURATION)
-        })
+        self.recently_updated
+            .values()
+            .any(|t| now.checked_duration_since(*t).is_some_and(|d| d < FLASH_DURATION))
     }
 }
 
-#[allow(clippy::too_many_lines)]
 pub fn render(
     ui: &mut egui::Ui,
     snapshot: &DeviceSnapshot,
@@ -72,15 +70,53 @@ pub fn render(
 ) {
     let now_system = SystemTime::now();
     let now_inst = Instant::now();
-    let mut nodes: Vec<&Node> = snapshot.nodes.values().collect();
+
+    let mut nodes: Vec<&Node> = filtered_nodes(snapshot, &nodes_ui.search);
+    let total = snapshot.nodes.len();
     sort_nodes(&mut nodes, nodes_ui.sort, nodes_ui.ascending);
 
     if nodes_ui.any_flashing(now_inst) {
         ui.ctx().request_repaint_after(Duration::from_millis(16));
     }
 
+    toolbar(ui, nodes_ui, nodes.len(), total);
+    ui.separator();
+    table(ui, &nodes, nodes_ui, detail_node, now_inst, now_system);
+}
+
+fn filtered_nodes<'a>(snapshot: &'a DeviceSnapshot, query: &str) -> Vec<&'a Node> {
+    let q = query.trim().to_lowercase();
+    if q.is_empty() {
+        return snapshot.nodes.values().collect();
+    }
+    snapshot
+        .nodes
+        .values()
+        .filter(|n| {
+            n.long_name.to_lowercase().contains(&q)
+                || n.short_name.to_lowercase().contains(&q)
+                || format!("{:08x}", n.id.0).contains(&q)
+        })
+        .collect()
+}
+
+fn toolbar(ui: &mut egui::Ui, nodes_ui: &mut NodesUi, shown: usize, total: usize) {
     ui.horizontal(|ui| {
-        ui.label(format!("{} nodes", nodes.len()));
+        if shown == total {
+            ui.label(format!("{total} nodes"));
+        } else {
+            ui.label(format!("{shown}/{total}"));
+        }
+        ui.separator();
+        ui.label("Search:");
+        let resp = ui.add(
+            egui::TextEdit::singleline(&mut nodes_ui.search)
+                .hint_text("name or id")
+                .desired_width(180.0),
+        );
+        if !nodes_ui.search.is_empty() && resp.has_focus() && ui.small_button("clear").clicked() {
+            nodes_ui.search.clear();
+        }
         ui.separator();
         ui.label("Sort:");
         for s in [
@@ -102,8 +138,16 @@ pub fn render(
         }
         ui.label(if nodes_ui.ascending { "asc" } else { "desc" });
     });
-    ui.separator();
+}
 
+fn table(
+    ui: &mut egui::Ui,
+    nodes: &[&Node],
+    nodes_ui: &NodesUi,
+    detail_node: &mut Option<NodeId>,
+    now_inst: Instant,
+    now_system: SystemTime,
+) {
     TableBuilder::new(ui)
         .striped(true)
         .column(Column::auto().resizable(true))
@@ -125,56 +169,56 @@ pub fn render(
             for node in nodes {
                 let alpha = nodes_ui.flash_alpha(node.id, now_inst);
                 let flash = (alpha > 0.0).then(|| flash_color(alpha));
-                body.row(18.0, |mut row| {
-                    row.col(|ui| {
-                        paint_flash(ui, flash);
-                        if ui
-                            .add(
-                                egui::Label::new(display_name(node))
-                                    .sense(egui::Sense::click()),
-                            )
-                            .clicked()
-                        {
-                            *detail_node = Some(node.id);
-                        }
-                    });
-                    row.col(|ui| {
-                        paint_flash(ui, flash);
-                        ui.label(&node.short_name);
-                    });
-                    row.col(|ui| {
-                        paint_flash(ui, flash);
-                        ui.label(format!("{:?}", node.role));
-                    });
-                    row.col(|ui| {
-                        paint_flash(ui, flash);
-                        ui.label(
-                            node.battery_level.map_or_else(|| "—".into(), |b| format!("{b}%")),
-                        );
-                    });
-                    row.col(|ui| {
-                        paint_flash(ui, flash);
-                        ui.label(node.snr_db.map_or_else(|| "—".into(), |s| format!("{s:.1}")));
-                    });
-                    row.col(|ui| {
-                        paint_flash(ui, flash);
-                        ui.label(node.hops_away.map_or_else(|| "—".into(), |h| format!("{h}")));
-                    });
-                    row.col(|ui| {
-                        paint_flash(ui, flash);
-                        ui.label(format_last_heard(node.last_heard, now_system));
-                    });
-                    row.col(|ui| {
-                        paint_flash(ui, flash);
-                        let pos = node.position.as_ref().map_or_else(
-                            || "—".into(),
-                            |p| format!("{:.4}, {:.4}", p.latitude_deg, p.longitude_deg),
-                        );
-                        ui.label(pos);
-                    });
-                });
+                body.row(18.0, |row| row_cells(row, node, flash, detail_node, now_system));
             }
         });
+}
+
+fn row_cells(
+    mut row: egui_extras::TableRow<'_, '_>,
+    node: &Node,
+    flash: Option<egui::Color32>,
+    detail_node: &mut Option<NodeId>,
+    now_system: SystemTime,
+) {
+    row.col(|ui| {
+        paint_flash(ui, flash);
+        if ui.add(egui::Label::new(display_name(node)).sense(egui::Sense::click())).clicked() {
+            *detail_node = Some(node.id);
+        }
+    });
+    row.col(|ui| {
+        paint_flash(ui, flash);
+        ui.label(&node.short_name);
+    });
+    row.col(|ui| {
+        paint_flash(ui, flash);
+        ui.label(format!("{:?}", node.role));
+    });
+    row.col(|ui| {
+        paint_flash(ui, flash);
+        ui.label(node.battery_level.map_or_else(|| "—".into(), |b| format!("{b}%")));
+    });
+    row.col(|ui| {
+        paint_flash(ui, flash);
+        ui.label(node.snr_db.map_or_else(|| "—".into(), |s| format!("{s:.1}")));
+    });
+    row.col(|ui| {
+        paint_flash(ui, flash);
+        ui.label(node.hops_away.map_or_else(|| "—".into(), |h| format!("{h}")));
+    });
+    row.col(|ui| {
+        paint_flash(ui, flash);
+        ui.label(format_last_heard(node.last_heard, now_system));
+    });
+    row.col(|ui| {
+        paint_flash(ui, flash);
+        let pos = node.position.as_ref().map_or_else(
+            || "—".into(),
+            |p| format!("{:.4}, {:.4}", p.latitude_deg, p.longitude_deg),
+        );
+        ui.label(pos);
+    });
 }
 
 fn flash_color(alpha: f32) -> egui::Color32 {

@@ -27,7 +27,6 @@ pub struct Dirty {
     pub lora: bool,
 }
 
-#[allow(clippy::too_many_lines)]
 pub fn render(
     ui: &mut egui::Ui,
     snapshot: &DeviceSnapshot,
@@ -35,12 +34,27 @@ pub fn render(
     cmd: &mpsc::UnboundedSender<Command>,
 ) {
     sync_from_snapshot(snapshot, settings_ui);
+    owner_section(ui, settings_ui, cmd);
+    ui.separator();
+    lora_section(ui, settings_ui, cmd);
+    if let Some(saved) = &settings_ui.last_save {
+        ui.separator();
+        ui.colored_label(
+            egui::Color32::LIGHT_GREEN,
+            format!("{saved} applied (device may reboot)"),
+        );
+    }
+}
 
+fn owner_section(
+    ui: &mut egui::Ui,
+    settings_ui: &mut SettingsUi,
+    cmd: &mpsc::UnboundedSender<Command>,
+) {
     ui.heading("Owner");
     ui.horizontal(|ui| {
         ui.label("Long name:");
-        let resp = ui.text_edit_singleline(&mut settings_ui.draft.long_name);
-        if resp.changed() {
+        if ui.text_edit_singleline(&mut settings_ui.draft.long_name).changed() {
             settings_ui.dirty.owner = true;
         }
     });
@@ -57,10 +71,7 @@ pub fn render(
         }
     });
     ui.horizontal(|ui| {
-        let can_save = settings_ui.dirty.owner
-            && !settings_ui.draft.long_name.trim().is_empty()
-            && !settings_ui.draft.short_name.trim().is_empty()
-            && settings_ui.draft.short_name.chars().count() <= 4;
+        let can_save = owner_valid(settings_ui);
         if ui.add_enabled(can_save, egui::Button::new("Save owner")).clicked() {
             let _ = cmd.send(Command::SetOwner {
                 long_name: settings_ui.draft.long_name.clone(),
@@ -73,10 +84,40 @@ pub fn render(
             ui.weak("unsaved changes");
         }
     });
+}
 
-    ui.separator();
+fn owner_valid(settings_ui: &SettingsUi) -> bool {
+    settings_ui.dirty.owner
+        && !settings_ui.draft.long_name.trim().is_empty()
+        && !settings_ui.draft.short_name.trim().is_empty()
+        && settings_ui.draft.short_name.chars().count() <= 4
+}
+
+fn lora_section(
+    ui: &mut egui::Ui,
+    settings_ui: &mut SettingsUi,
+    cmd: &mpsc::UnboundedSender<Command>,
+) {
     ui.heading("LoRa");
+    let mut dirty = settings_ui.dirty.lora;
     let lora = &mut settings_ui.draft.lora;
+    lora_region_row(ui, lora, &mut dirty);
+    lora_preset_rows(ui, lora, &mut dirty);
+    lora_numeric_rows(ui, lora, &mut dirty);
+    settings_ui.dirty.lora = dirty;
+    ui.horizontal(|ui| {
+        if ui.add_enabled(settings_ui.dirty.lora, egui::Button::new("Save LoRa")).clicked() {
+            let _ = cmd.send(Command::SetLora(settings_ui.draft.lora.clone()));
+            settings_ui.dirty.lora = false;
+            settings_ui.last_save = Some("LoRa".into());
+        }
+        if settings_ui.dirty.lora {
+            ui.weak("unsaved changes");
+        }
+    });
+}
+
+fn lora_region_row(ui: &mut egui::Ui, lora: &mut LoraSettings, dirty: &mut bool) {
     ui.horizontal(|ui| {
         ui.label("Region:");
         let selected = region_label(lora.region);
@@ -86,15 +127,18 @@ pub fn render(
                     .selectable_value(&mut lora.region, *region, region_label(*region))
                     .changed()
                 {
-                    settings_ui.dirty.lora = true;
+                    *dirty = true;
                 }
             }
         });
     });
+}
+
+fn lora_preset_rows(ui: &mut egui::Ui, lora: &mut LoraSettings, dirty: &mut bool) {
     ui.horizontal(|ui| {
         ui.label("Use preset:");
         if ui.checkbox(&mut lora.use_preset, "").changed() {
-            settings_ui.dirty.lora = true;
+            *dirty = true;
         }
     });
     ui.horizontal(|ui| {
@@ -106,49 +150,34 @@ pub fn render(
                     .selectable_value(&mut lora.modem_preset, *preset, modem_preset_label(*preset))
                     .changed()
                 {
-                    settings_ui.dirty.lora = true;
+                    *dirty = true;
                 }
             }
         });
     });
+}
+
+fn lora_numeric_rows(ui: &mut egui::Ui, lora: &mut LoraSettings, dirty: &mut bool) {
     ui.horizontal(|ui| {
         ui.label("Max hops:");
         let mut hop = u32::from(lora.hop_limit);
         if ui.add(egui::Slider::new(&mut hop, 1..=7)).changed() {
-            lora.hop_limit = hop as u8;
-            settings_ui.dirty.lora = true;
+            lora.hop_limit = u8::try_from(hop).unwrap_or(lora.hop_limit);
+            *dirty = true;
         }
     });
     ui.horizontal(|ui| {
         ui.label("TX enabled:");
         if ui.checkbox(&mut lora.tx_enabled, "").changed() {
-            settings_ui.dirty.lora = true;
+            *dirty = true;
         }
     });
     ui.horizontal(|ui| {
         ui.label("TX power (dBm, 0 = default):");
         if ui.add(egui::DragValue::new(&mut lora.tx_power).range(0..=30)).changed() {
-            settings_ui.dirty.lora = true;
+            *dirty = true;
         }
     });
-    ui.horizontal(|ui| {
-        if ui.add_enabled(settings_ui.dirty.lora, egui::Button::new("Save LoRa")).clicked() {
-            let _ = cmd.send(Command::SetLora(lora.clone()));
-            settings_ui.dirty.lora = false;
-            settings_ui.last_save = Some("LoRa".into());
-        }
-        if settings_ui.dirty.lora {
-            ui.weak("unsaved changes");
-        }
-    });
-
-    if let Some(saved) = &settings_ui.last_save {
-        ui.separator();
-        ui.colored_label(
-            egui::Color32::LIGHT_GREEN,
-            format!("{saved} applied (device may reboot)"),
-        );
-    }
 }
 
 fn sync_from_snapshot(snapshot: &DeviceSnapshot, ui_state: &mut SettingsUi) {

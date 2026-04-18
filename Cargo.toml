@@ -61,6 +61,7 @@ egui_extras = "0.29"
 futures = "0.3"
 parking_lot = "0.12"
 prost = "0.13"
+rusqlite = { version = "0.32", features = ["bundled"] }
 rand = "0.8"
 serde = { version = "1", features = ["derive"] }
 thiserror = "1"

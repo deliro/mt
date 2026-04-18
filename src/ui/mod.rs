@@ -12,9 +12,12 @@ use std::time::Instant;
 use eframe::egui;
 use tokio::sync::mpsc;
 
+use tracing::warn;
+
 use crate::domain::ids::NodeId;
 use crate::domain::profile::ConnectionProfile;
 use crate::domain::snapshot::DeviceSnapshot;
+use crate::persist::messages::MessageStore;
 use crate::session::Event;
 use crate::session::commands::Command;
 
@@ -61,6 +64,7 @@ pub struct App {
     cmd_tx: mpsc::UnboundedSender<Command>,
     ev_rx: mpsc::Receiver<Event>,
     profiles_path: PathBuf,
+    store: Option<MessageStore>,
 }
 
 impl App {
@@ -69,12 +73,14 @@ impl App {
         profiles_path: PathBuf,
         cmd_tx: mpsc::UnboundedSender<Command>,
         ev_rx: mpsc::Receiver<Event>,
+        store: Option<MessageStore>,
     ) -> Self {
         Self {
             state: AppState { profiles, ..AppState::default() },
             cmd_tx,
             ev_rx,
             profiles_path,
+            store,
         }
     }
 
@@ -104,7 +110,24 @@ impl App {
             }
             Event::Connected(snap) => {
                 self.state.status = SessionStatus::Connected;
-                self.state.snapshot = *snap;
+                let mut snapshot = *snap;
+                if let Some(store) = &self.store {
+                    match store.load(snapshot.my_node) {
+                        Ok(history) => {
+                            for m in history {
+                                snapshot.upsert_message(m);
+                            }
+                        }
+                        Err(e) => warn!(%e, "load message history failed"),
+                    }
+                    for m in snapshot.messages.clone() {
+                        if let Err(e) = store.upsert(snapshot.my_node, &m) {
+                            warn!(%e, "persist handshake message failed");
+                        }
+                    }
+                }
+                snapshot.messages.sort_by_key(|m| m.received_at);
+                self.state.snapshot = snapshot;
             }
             Event::NodeUpdated(node) => {
                 if node.id == self.state.snapshot.my_node {
@@ -125,11 +148,21 @@ impl App {
                 self.state.snapshot.lora = Some(lora);
             }
             Event::MessageReceived(m) => {
-                self.state.snapshot.messages.push(m);
+                if let Some(store) = &self.store
+                    && let Err(e) = store.upsert(self.state.snapshot.my_node, &m)
+                {
+                    warn!(%e, "persist message failed");
+                }
+                self.state.snapshot.upsert_message(m);
             }
             Event::MessageStateChanged { id, state } => {
                 if let Some(m) = self.state.snapshot.messages.iter_mut().find(|m| m.id == id) {
-                    m.state = state;
+                    m.state = state.clone();
+                }
+                if let Some(store) = &self.store
+                    && let Err(e) = store.update_state(self.state.snapshot.my_node, id, &state)
+                {
+                    warn!(%e, "persist state change failed");
                 }
             }
             Event::Disconnected => {

@@ -25,4 +25,19 @@ impl DeviceSnapshot {
             None => self.channels.push(channel),
         }
     }
+
+    /// Insert a message, deduplicating on (from, id, direction). If a duplicate
+    /// is found keep the existing entry but upgrade its `state` when the new
+    /// state is strictly more terminal (Queued < Sent < Acked/Failed).
+    pub fn upsert_message(&mut self, msg: crate::domain::message::TextMessage) {
+        if let Some(existing) = self.messages.iter_mut().find(|m| {
+            m.id == msg.id && m.from == msg.from && m.direction == msg.direction
+        }) {
+            if msg.state.rank() > existing.state.rank() {
+                existing.state = msg.state;
+            }
+            return;
+        }
+        self.messages.push(msg);
+    }
 }
