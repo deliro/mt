@@ -3,6 +3,19 @@ name = "mt"
 version = "0.1.0"
 edition = "2024"
 publish = false
+description = "Native desktop client for Meshtastic radios (BLE / Serial / TCP)"
+license = "Apache-2.0 OR MIT"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
+panic = "abort"
+
+[profile.release-debuginfo]
+inherits = "release"
+strip = "none"
+debug = "line-tables-only"
 
 [lints.rust]
 unsafe_code = "deny"
