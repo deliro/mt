@@ -12,6 +12,7 @@ use crate::error::PersistError;
 const SETTING_PROFILES: &str = "profiles_json";
 const SETTING_LAST_ACTIVE: &str = "last_active_key";
 const SETTING_NODES_SORT: &str = "nodes_sort";
+const SETTING_ALERTS: &str = "alerts";
 
 pub struct HistoryStore {
     conn: Connection,
@@ -103,6 +104,14 @@ impl HistoryStore {
 
     pub fn save_nodes_sort_json(&self, value: &str) -> Result<(), PersistError> {
         self.save_setting(SETTING_NODES_SORT, Some(value))
+    }
+
+    pub fn load_alerts_json(&self) -> Result<Option<String>, PersistError> {
+        self.load_setting(SETTING_ALERTS)
+    }
+
+    pub fn save_alerts_json(&self, value: &str) -> Result<(), PersistError> {
+        self.save_setting(SETTING_ALERTS, Some(value))
     }
 
     fn load_setting(&self, key: &str) -> Result<Option<String>, PersistError> {

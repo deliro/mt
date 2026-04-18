@@ -1,3 +1,4 @@
+pub mod alerts;
 pub mod channels;
 pub mod chat;
 pub mod connect;
@@ -55,6 +56,9 @@ pub struct AppState {
     pub channels_ui: channels::ChannelsUi,
     pub inspector_ui: inspector::InspectorUi,
     pub logs_ui: logs::LogsUi,
+    pub alerts: alerts::AlertConfig,
+    pub alerts_runtime: alerts::AlertRuntime,
+    pub alerts_dirty: bool,
     pub traceroutes: TracerouteUi,
     pub remote_admin: remote_admin::RemoteAdminUi,
     pub probed_nodes: std::collections::HashSet<NodeId>,
@@ -108,6 +112,7 @@ impl App {
         profiles: Vec<ConnectionProfile>,
         last_active_key: Option<String>,
         nodes_sort: nodes::NodesSortPref,
+        alerts: alerts::AlertConfig,
         cmd_tx: mpsc::UnboundedSender<Command>,
         ev_rx: mpsc::Receiver<Event>,
         store: Option<HistoryStore>,
@@ -149,6 +154,7 @@ impl App {
             state: AppState {
                 profiles,
                 nodes_ui,
+                alerts,
                 reconnect,
                 ..AppState::default()
             },
@@ -298,6 +304,9 @@ impl App {
     }
 
     fn apply_node_updated(&mut self, node: crate::domain::node::Node) {
+        for event in alerts::on_node(&self.state.alerts, &mut self.state.alerts_runtime, &node) {
+            alerts::fire(&event);
+        }
         if node.id == self.state.snapshot.my_node {
             if !node.long_name.is_empty() {
                 self.state.snapshot.long_name.clone_from(&node.long_name);
@@ -323,6 +332,15 @@ impl App {
             warn!(%e, "persist message failed");
         }
         let from = m.from;
+        let sender = self
+            .state
+            .snapshot
+            .nodes
+            .get(&from)
+            .map_or_else(|| format!("!{:08x}", from.0), node_display_name);
+        for event in alerts::on_message(&self.state.alerts, self.state.snapshot.my_node, &m, &sender) {
+            alerts::fire(&event);
+        }
         self.state.snapshot.upsert_message(m);
         self.probe_node_if_unknown(from);
     }
@@ -443,6 +461,16 @@ fn load_history(
     }
 }
 
+fn node_display_name(node: &crate::domain::node::Node) -> String {
+    if !node.long_name.is_empty() {
+        node.long_name.clone()
+    } else if !node.short_name.is_empty() {
+        node.short_name.clone()
+    } else {
+        format!("!{:08x}", node.id.0)
+    }
+}
+
 const fn is_activity(ev: &Event) -> bool {
     matches!(
         ev,
@@ -481,6 +509,7 @@ impl eframe::App for App {
         self.handle_shortcuts(ctx);
         self.flush_profiles_dirty();
         self.flush_nodes_sort_dirty();
+        self.flush_alerts_dirty();
         self.render_reconnect(ctx);
         self.render_chrome(ctx);
         if !self.state.connected() {
@@ -514,6 +543,23 @@ impl App {
             warn!(%e, "persist profiles failed");
         }
         self.state.profiles_dirty = false;
+    }
+
+    fn flush_alerts_dirty(&mut self) {
+        if !self.state.alerts_dirty {
+            return;
+        }
+        if let Some(store) = self.store.as_ref() {
+            match serde_json::to_string(&self.state.alerts) {
+                Ok(blob) => {
+                    if let Err(e) = store.save_alerts_json(&blob) {
+                        warn!(%e, "persist alerts failed");
+                    }
+                }
+                Err(e) => warn!(%e, "serialize alerts failed"),
+            }
+        }
+        self.state.alerts_dirty = false;
     }
 
     fn flush_nodes_sort_dirty(&mut self) {
@@ -617,8 +663,20 @@ impl App {
             Tab::Settings => {
                 self.refresh_storage_counts();
                 egui::CentralPanel::default().show(ctx, |ui| {
-                    let AppState { snapshot, settings_ui, .. } = &mut self.state;
-                    settings::render(ui, snapshot, settings_ui, &self.cmd_tx);
+                    let AppState {
+                        snapshot,
+                        settings_ui,
+                        alerts,
+                        alerts_dirty,
+                        ..
+                    } = &mut self.state;
+                    settings::render(
+                        ui,
+                        snapshot,
+                        settings_ui,
+                        settings::AlertsCtx { config: alerts, dirty: alerts_dirty },
+                        &self.cmd_tx,
+                    );
                 });
                 if let Some(kind) = self.state.settings_ui.pending_clear.take() {
                     self.handle_clear(kind);

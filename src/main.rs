@@ -37,6 +37,11 @@ fn main() -> eframe::Result<()> {
         .and_then(|s| s.load_nodes_sort_json().ok().flatten())
         .and_then(|blob| serde_json::from_str(&blob).ok())
         .unwrap_or_default();
+    let alerts = store
+        .as_ref()
+        .and_then(|s| s.load_alerts_json().ok().flatten())
+        .and_then(|blob| serde_json::from_str(&blob).ok())
+        .unwrap_or_default();
 
     let runtime = match tokio::runtime::Builder::new_multi_thread().enable_all().build() {
         Ok(rt) => Arc::new(rt),
@@ -83,6 +88,7 @@ fn main() -> eframe::Result<()> {
                 profiles,
                 last_active_key,
                 nodes_sort,
+                alerts,
                 cmd_tx,
                 ev_rx,
                 store,

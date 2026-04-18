@@ -37,6 +37,7 @@ pub enum Section {
     Canned,
     RangeTest,
     Backup,
+    Alerts,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -108,18 +109,25 @@ pub fn render(
     ui: &mut egui::Ui,
     snapshot: &DeviceSnapshot,
     settings_ui: &mut SettingsUi,
+    alerts_state: AlertsCtx<'_>,
     cmd: &mpsc::UnboundedSender<Command>,
 ) {
     sync_from_snapshot(snapshot, settings_ui);
     egui::ScrollArea::vertical().auto_shrink([false; 2]).show(ui, |ui| {
-        sections(ui, snapshot, settings_ui, cmd);
+        sections(ui, snapshot, settings_ui, alerts_state, cmd);
     });
+}
+
+pub struct AlertsCtx<'a> {
+    pub config: &'a mut crate::ui::alerts::AlertConfig,
+    pub dirty: &'a mut bool,
 }
 
 fn sections(
     ui: &mut egui::Ui,
     snapshot: &DeviceSnapshot,
     s: &mut SettingsUi,
+    alerts_state: AlertsCtx<'_>,
     cmd: &mpsc::UnboundedSender<Command>,
 ) {
     collapsible(ui, "Owner", |ui| owner_section(ui, s, cmd));
@@ -139,6 +147,7 @@ fn sections(
     collapsible(ui, "Canned Messages", |ui| canned_section(ui, s, cmd));
     collapsible(ui, "Range Test", |ui| range_test_section(ui, s, cmd));
     collapsible(ui, "Backup / restore", |ui| backup_section(ui, snapshot, s, cmd));
+    collapsible(ui, "Alerts", |ui| alerts_section(ui, snapshot, alerts_state));
     collapsible(ui, "Admin", |ui| admin_section(ui, s));
     collapsible(ui, "Storage", |ui| storage_section(ui, s));
     admin_confirm_modal(ui.ctx(), s, cmd);
@@ -1749,6 +1758,170 @@ fn dispatch_fixed_position_import(
     });
 }
 
+// ---- Alerts ----
+
+fn alerts_section(ui: &mut egui::Ui, snapshot: &DeviceSnapshot, ctx: AlertsCtx<'_>) {
+    ui.label(egui::RichText::new(
+        "Fires native OS notifications on chosen mesh events. Runs entirely in this app; \
+         the device doesn't know about these rules.",
+    ).weak());
+    let AlertsCtx { config, dirty } = ctx;
+    if ui.checkbox(&mut config.enabled, "Alerts enabled").changed() {
+        *dirty = true;
+    }
+    if ui.checkbox(&mut config.notify_on_dm, "Notify on direct messages").changed() {
+        *dirty = true;
+    }
+    ui.separator();
+    alerts_keywords(ui, config, dirty);
+    ui.separator();
+    alerts_battery_rules(ui, snapshot, config, dirty);
+}
+
+fn alerts_keywords(
+    ui: &mut egui::Ui,
+    config: &mut crate::ui::alerts::AlertConfig,
+    dirty: &mut bool,
+) {
+    ui.label(egui::RichText::new("Keywords").strong());
+    ui.label(egui::RichText::new(
+        "Any message (DM or broadcast) containing one of these words fires an alert. \
+         Matching is case-insensitive.",
+    ).weak());
+    let mut remove: Option<usize> = None;
+    for (idx, kw) in config.keywords.iter().enumerate() {
+        ui.horizontal(|ui| {
+            ui.monospace(kw);
+            if ui.small_button("Remove").clicked() {
+                remove = Some(idx);
+            }
+        });
+    }
+    if let Some(i) = remove
+        && i < config.keywords.len()
+    {
+        let _ = config.keywords.remove(i);
+        *dirty = true;
+    }
+    ui.horizontal(|ui| {
+        let id = ui.id().with("alerts_kw_input");
+        let mut input = ui.data(|d| d.get_temp::<String>(id)).unwrap_or_default();
+        ui.add(
+            egui::TextEdit::singleline(&mut input)
+                .hint_text("add keyword")
+                .desired_width(200.0),
+        );
+        if ui.button("Add").clicked() && !input.trim().is_empty() {
+            config.keywords.push(input.trim().to_owned());
+            input.clear();
+            *dirty = true;
+        }
+        ui.data_mut(|d| d.insert_temp(id, input));
+    });
+}
+
+fn alerts_battery_rules(
+    ui: &mut egui::Ui,
+    snapshot: &DeviceSnapshot,
+    config: &mut crate::ui::alerts::AlertConfig,
+    dirty: &mut bool,
+) {
+    ui.label(egui::RichText::new("Battery thresholds").strong());
+    ui.label(egui::RichText::new(
+        "Alert when the battery level of a tracked node drops below the threshold. Fires \
+         once per crossing (no spam at every telemetry update).",
+    ).weak());
+    let mut remove: Option<usize> = None;
+    for (idx, rule) in config.battery_rules.iter().enumerate() {
+        ui.horizontal(|ui| {
+            let name = snapshot
+                .nodes
+                .get(&rule.node)
+                .map_or_else(|| format!("!{:08x}", rule.node.0), node_display_name);
+            ui.monospace(format!("{name} < {}%", rule.threshold_percent));
+            if ui.small_button("Remove").clicked() {
+                remove = Some(idx);
+            }
+        });
+    }
+    if let Some(i) = remove
+        && i < config.battery_rules.len()
+    {
+        let _ = config.battery_rules.remove(i);
+        *dirty = true;
+    }
+    alerts_battery_add_row(ui, snapshot, config, dirty);
+}
+
+fn alerts_battery_add_row(
+    ui: &mut egui::Ui,
+    snapshot: &DeviceSnapshot,
+    config: &mut crate::ui::alerts::AlertConfig,
+    dirty: &mut bool,
+) {
+    let node_id_input_key = ui.id().with("alerts_bat_node");
+    let threshold_key = ui.id().with("alerts_bat_threshold");
+    let mut node_id_str: String = ui
+        .data(|d| d.get_temp::<String>(node_id_input_key))
+        .unwrap_or_default();
+    let mut threshold: u8 = ui.data(|d| d.get_temp::<u8>(threshold_key)).unwrap_or(20);
+    let node_options: Vec<(crate::domain::ids::NodeId, String)> = {
+        let mut v: Vec<_> = snapshot
+            .nodes
+            .values()
+            .map(|n| (n.id, node_display_name(n)))
+            .collect();
+        v.sort_by(|a, b| a.1.cmp(&b.1));
+        v
+    };
+    ui.horizontal(|ui| {
+        ui.label("Add rule:");
+        egui::ComboBox::from_id_salt("alerts_bat_pick")
+            .selected_text(if node_id_str.is_empty() {
+                "(pick node)".into()
+            } else {
+                node_id_str.clone()
+            })
+            .show_ui(ui, |ui| {
+                for (id, name) in &node_options {
+                    let label = format!("{name} !{:08x}", id.0);
+                    if ui
+                        .selectable_label(node_id_str == label, &label)
+                        .clicked()
+                    {
+                        node_id_str.clone_from(&label);
+                    }
+                }
+            });
+        ui.add(egui::DragValue::new(&mut threshold).range(1..=100).suffix("%"));
+        if ui.button("Add").clicked()
+            && let Some((id, _)) = node_options.iter().find(|(id, n)| {
+                let label = format!("{n} !{:08x}", id.0);
+                label == node_id_str
+            })
+        {
+            config.battery_rules.push(crate::ui::alerts::BatteryRule {
+                node: *id,
+                threshold_percent: threshold,
+            });
+            node_id_str.clear();
+            *dirty = true;
+        }
+    });
+    ui.data_mut(|d| d.insert_temp(node_id_input_key, node_id_str));
+    ui.data_mut(|d| d.insert_temp(threshold_key, threshold));
+}
+
+fn node_display_name(node: &crate::domain::node::Node) -> String {
+    if !node.long_name.is_empty() {
+        node.long_name.clone()
+    } else if !node.short_name.is_empty() {
+        node.short_name.clone()
+    } else {
+        format!("!{:08x}", node.id.0)
+    }
+}
+
 // ---- Commit helper ----
 
 fn commit(
@@ -1790,6 +1963,7 @@ const fn section_label(section: Section) -> &'static str {
         Section::Canned => "Canned Messages",
         Section::RangeTest => "Range Test",
         Section::Backup => "Backup",
+        Section::Alerts => "Alerts",
     }
 }
 
