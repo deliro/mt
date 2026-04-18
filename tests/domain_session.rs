@@ -84,7 +84,7 @@ fn ready_applies_incoming_text_and_state_changes() {
         text: "hello".into(),
         received_at: std::time::SystemTime::UNIX_EPOCH,
         direction: Direction::Incoming,
-        state: DeliveryState::Delivered,
+        state: DeliveryState::Acked,
     };
     let s = apply(s, HandshakeFragment::Message(msg));
     let s = apply(

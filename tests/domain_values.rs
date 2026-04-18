@@ -33,10 +33,10 @@ fn text_message_records_direction_and_state() {
         text: "hi".into(),
         received_at: std::time::SystemTime::UNIX_EPOCH,
         direction: Direction::Outgoing,
-        state: DeliveryState::Pending,
+        state: DeliveryState::Queued,
     };
     assert_eq!(m.direction, Direction::Outgoing);
-    assert_eq!(m.state, DeliveryState::Pending);
+    assert_eq!(m.state, DeliveryState::Queued);
 }
 
 #[test]

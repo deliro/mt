@@ -16,9 +16,24 @@ pub enum Recipient {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DeliveryState {
-    Pending,
-    Delivered,
+    Queued,
+    Sent,
+    Acked,
     Failed(String),
+}
+
+impl DeliveryState {
+    pub fn rank(&self) -> u8 {
+        match self {
+            Self::Queued => 0,
+            Self::Sent => 1,
+            Self::Acked | Self::Failed(_) => 2,
+        }
+    }
+
+    pub fn is_terminal(&self) -> bool {
+        matches!(self, Self::Acked | Self::Failed(_))
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

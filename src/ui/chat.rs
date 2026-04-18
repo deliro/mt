@@ -71,17 +71,8 @@ fn message_list(ui: &mut egui::Ui, state: &AppState, active: ChannelIndex) {
                     ui.label(format!("→ {label}"));
                 }
                 ui.label(&m.text);
-                match (&m.direction, &m.state) {
-                    (Direction::Outgoing, DeliveryState::Pending) => {
-                        ui.weak("…");
-                    }
-                    (Direction::Outgoing, DeliveryState::Delivered) => {
-                        ui.colored_label(egui::Color32::LIGHT_GREEN, "✓");
-                    }
-                    (Direction::Outgoing, DeliveryState::Failed(reason)) => {
-                        ui.colored_label(egui::Color32::LIGHT_RED, format!("! {reason}"));
-                    }
-                    (Direction::Incoming, _) => {}
+                if m.direction == Direction::Outgoing {
+                    render_delivery(ui, &m.state);
                 }
             });
         }
@@ -137,6 +128,24 @@ fn composer(
             response.request_focus();
         }
     });
+}
+
+fn render_delivery(ui: &mut egui::Ui, state: &DeliveryState) {
+    match state {
+        DeliveryState::Queued => {
+            ui.weak("⏳").on_hover_text("queued on phone");
+        }
+        DeliveryState::Sent => {
+            ui.weak("✓").on_hover_text("sent to device");
+        }
+        DeliveryState::Acked => {
+            ui.colored_label(egui::Color32::LIGHT_GREEN, "✓✓").on_hover_text("acknowledged");
+        }
+        DeliveryState::Failed(reason) => {
+            ui.colored_label(egui::Color32::LIGHT_RED, "⚠")
+                .on_hover_text(format!("failed: {reason}"));
+        }
+    }
 }
 
 fn node_display_name(state: &AppState, id: NodeId) -> String {

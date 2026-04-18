@@ -238,18 +238,20 @@ async fn run_ready_loop(
     let mut heartbeat = interval(HEARTBEAT_INTERVAL);
     heartbeat.set_missed_tick_behavior(MissedTickBehavior::Delay);
     let _ = heartbeat.tick().await;
+    let mut pending: std::collections::HashSet<PacketId> =
+        std::collections::HashSet::default();
 
     loop {
         let step = tokio::select! {
             cmd = rx.recv() => match cmd {
-                Some(c) => handle_command(c, my_node, sink, tx).await,
+                Some(c) => handle_command(c, my_node, sink, tx, &mut pending).await,
                 None => LoopStep::Channel,
             },
             _ = heartbeat.tick() => match send_heartbeat(sink).await {
                 Ok(()) => LoopStep::Continue,
                 Err(e) => LoopStep::Error(e.to_string()),
             },
-            item = stream.next() => handle_incoming(item, tx).await,
+            item = stream.next() => handle_incoming(item, tx, &mut pending).await,
         };
         match step {
             LoopStep::Continue => {}
@@ -278,6 +280,7 @@ async fn handle_command(
     my_node: NodeId,
     sink: &mut Pin<Box<impl futures::Sink<Vec<u8>, Error = crate::transport::TransportError> + ?Sized>>,
     tx: &mpsc::Sender<Event>,
+    pending: &mut std::collections::HashSet<PacketId>,
 ) -> LoopStep {
     match cmd {
         Command::Connect(_) => {
@@ -288,6 +291,7 @@ async fn handle_command(
         Command::SendText { channel, to, text, want_ack } => {
             match send_text(sink, channel, to, &text, want_ack).await {
                 Ok(id) => {
+                    let _ = pending.insert(id);
                     let _ = tx
                         .send(Event::MessageReceived(TextMessage {
                             id,
@@ -297,7 +301,7 @@ async fn handle_command(
                             text,
                             received_at: SystemTime::now(),
                             direction: Direction::Outgoing,
-                            state: DeliveryState::Pending,
+                            state: DeliveryState::Queued,
                         }))
                         .await;
                     spawn_ack_timeout(tx.clone(), id);
@@ -307,12 +311,14 @@ async fn handle_command(
             }
         }
         Command::AckTimeout(id) => {
-            let _ = tx
-                .send(Event::MessageStateChanged {
-                    id,
-                    state: DeliveryState::Failed("no ack".into()),
-                })
-                .await;
+            if pending.remove(&id) {
+                let _ = tx
+                    .send(Event::MessageStateChanged {
+                        id,
+                        state: DeliveryState::Failed("no ack".into()),
+                    })
+                    .await;
+            }
             LoopStep::Continue
         }
     }
@@ -321,6 +327,7 @@ async fn handle_command(
 async fn handle_incoming(
     item: Option<Result<Vec<u8>, crate::transport::TransportError>>,
     tx: &mpsc::Sender<Event>,
+    pending: &mut std::collections::HashSet<PacketId>,
 ) -> LoopStep {
     let Some(item) = item else { return LoopStep::Disconnect };
     let frame = match item {
@@ -334,10 +341,32 @@ async fn handle_incoming(
             return LoopStep::Continue;
         }
     };
-    for ev in events_from_radio(msg) {
-        let _ = tx.send(ev).await;
+    for outcome in incoming_outcomes(msg) {
+        match outcome {
+            IncomingOutcome::Event(ev) => {
+                let _ = tx.send(ev).await;
+            }
+            IncomingOutcome::QueueOk(id) => {
+                if pending.contains(&id) {
+                    let _ = tx
+                        .send(Event::MessageStateChanged { id, state: DeliveryState::Sent })
+                        .await;
+                }
+            }
+            IncomingOutcome::Ack { id, state } => {
+                if pending.remove(&id) {
+                    let _ = tx.send(Event::MessageStateChanged { id, state }).await;
+                }
+            }
+        }
     }
     LoopStep::Continue
+}
+
+enum IncomingOutcome {
+    Event(Event),
+    QueueOk(PacketId),
+    Ack { id: PacketId, state: DeliveryState },
 }
 
 async fn send_want_config_id(
@@ -420,19 +449,30 @@ async fn emit_error_and_disconnect(tx: &mpsc::Sender<Event>, msg: &str) {
     let _ = tx.send(Event::Disconnected).await;
 }
 
-fn events_from_radio(msg: meshtastic::FromRadio) -> Vec<Event> {
+fn incoming_outcomes(msg: meshtastic::FromRadio) -> Vec<IncomingOutcome> {
     use meshtastic::from_radio::PayloadVariant;
     let Some(variant) = msg.payload_variant else { return Vec::new() };
     match variant {
-        PayloadVariant::Packet(packet) => packet_to_events(packet),
-        PayloadVariant::NodeInfo(ni) => vec![Event::NodeUpdated(node_from_proto(&ni))],
-        PayloadVariant::Channel(ch) => channel_to_events(ch),
+        PayloadVariant::Packet(packet) => packet_outcomes(packet),
+        PayloadVariant::NodeInfo(ni) => {
+            vec![IncomingOutcome::Event(Event::NodeUpdated(node_from_proto(&ni)))]
+        }
+        PayloadVariant::Channel(ch) => channel_to_events(ch)
+            .into_iter()
+            .map(IncomingOutcome::Event)
+            .collect(),
+        PayloadVariant::QueueStatus(qs) if qs.res == 0 => {
+            vec![IncomingOutcome::QueueOk(PacketId(qs.mesh_packet_id))]
+        }
+        PayloadVariant::QueueStatus(qs) => vec![IncomingOutcome::Ack {
+            id: PacketId(qs.mesh_packet_id),
+            state: DeliveryState::Failed(format!("device queue rejected ({})", qs.res)),
+        }],
         PayloadVariant::MyInfo(_)
         | PayloadVariant::Config(_)
         | PayloadVariant::ModuleConfig(_)
         | PayloadVariant::ConfigCompleteId(_)
         | PayloadVariant::Rebooted(_)
-        | PayloadVariant::QueueStatus(_)
         | PayloadVariant::XmodemPacket(_)
         | PayloadVariant::Metadata(_)
         | PayloadVariant::FileInfo(_)
@@ -443,14 +483,14 @@ fn events_from_radio(msg: meshtastic::FromRadio) -> Vec<Event> {
     }
 }
 
-fn packet_to_events(p: meshtastic::MeshPacket) -> Vec<Event> {
+fn packet_outcomes(p: meshtastic::MeshPacket) -> Vec<IncomingOutcome> {
     use meshtastic::mesh_packet::PayloadVariant;
     let Some(PayloadVariant::Decoded(data)) = p.payload_variant else { return Vec::new() };
     let request_id = data.request_id;
     let Ok(payload) = parse(data.portnum, &data.payload) else { return Vec::new() };
     let channel = ChannelIndex::new(p.channel as u8).unwrap_or_else(ChannelIndex::primary);
     match payload {
-        PortPayload::Text(text) => vec![Event::MessageReceived(TextMessage {
+        PortPayload::Text(text) => vec![IncomingOutcome::Event(Event::MessageReceived(TextMessage {
             id: PacketId(p.id),
             channel,
             from: NodeId(p.from),
@@ -462,12 +502,12 @@ fn packet_to_events(p: meshtastic::MeshPacket) -> Vec<Event> {
             text,
             received_at: SystemTime::now(),
             direction: Direction::Incoming,
-            state: DeliveryState::Delivered,
-        })],
+            state: DeliveryState::Acked,
+        }))],
         PortPayload::Routing(r) => {
             let id = PacketId(request_id);
             let state = match r.variant {
-                Some(meshtastic::routing::Variant::ErrorReason(0)) => DeliveryState::Delivered,
+                Some(meshtastic::routing::Variant::ErrorReason(0)) => DeliveryState::Acked,
                 Some(meshtastic::routing::Variant::ErrorReason(code)) => {
                     DeliveryState::Failed(format!("routing error {code}"))
                 }
@@ -477,7 +517,7 @@ fn packet_to_events(p: meshtastic::MeshPacket) -> Vec<Event> {
                 )
                 | None => return Vec::new(),
             };
-            vec![Event::MessageStateChanged { id, state }]
+            vec![IncomingOutcome::Ack { id, state }]
         }
         PortPayload::Position(_)
         | PortPayload::NodeInfo(_)
