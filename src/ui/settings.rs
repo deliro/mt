@@ -12,7 +12,7 @@ use crate::domain::config::{
     region_label,
 };
 use crate::domain::snapshot::DeviceSnapshot;
-use crate::session::commands::Command;
+use crate::session::commands::{AdminAction, Command};
 
 #[derive(Copy, Clone, Debug, Eq, Hash, PartialEq)]
 pub enum Section {
@@ -42,6 +42,7 @@ pub struct SettingsUi {
     pub stored_messages: Option<i64>,
     pub stored_nodes: Option<i64>,
     pub previous_fixed_enabled: bool,
+    pub pending_admin: Option<AdminAction>,
 }
 
 #[derive(Default, Clone)]
@@ -98,13 +99,83 @@ fn sections(ui: &mut egui::Ui, s: &mut SettingsUi, cmd: &mpsc::UnboundedSender<C
     collapsible(ui, "Network", |ui| network_section(ui, s, cmd));
     collapsible(ui, "Display", |ui| display_section(ui, s, cmd));
     collapsible(ui, "Bluetooth", |ui| bluetooth_section(ui, s, cmd));
+    collapsible(ui, "Admin", |ui| admin_section(ui, s));
     collapsible(ui, "Storage", |ui| storage_section(ui, s));
+    admin_confirm_modal(ui.ctx(), s, cmd);
     if let Some(saved) = &s.last_save {
         ui.separator();
         ui.colored_label(
             egui::Color32::LIGHT_GREEN,
             format!("{saved} applied (device may reboot)"),
         );
+    }
+}
+
+fn admin_section(ui: &mut egui::Ui, s: &mut SettingsUi) {
+    ui.weak("These commands affect the connected device. Destructive ones ask for confirmation.");
+    ui.add_space(4.0);
+    admin_button(ui, s, AdminAction::Reboot { seconds: 5 });
+    admin_button(ui, s, AdminAction::Shutdown { seconds: 5 });
+    admin_button(ui, s, AdminAction::RebootOta { seconds: 5 });
+    ui.separator();
+    admin_button(ui, s, AdminAction::NodedbReset);
+    admin_button(ui, s, AdminAction::FactoryResetConfig);
+    admin_button(ui, s, AdminAction::FactoryResetDevice);
+}
+
+fn admin_button(ui: &mut egui::Ui, s: &mut SettingsUi, action: AdminAction) {
+    ui.horizontal(|ui| {
+        let tinted = if action.is_destructive() {
+            egui::Button::new(action.label()).fill(egui::Color32::from_rgb(120, 30, 30))
+        } else {
+            egui::Button::new(action.label())
+        };
+        let resp = ui.add(tinted).on_hover_text(action.warning());
+        if resp.clicked() {
+            s.pending_admin = Some(action);
+        }
+    });
+}
+
+fn admin_confirm_modal(
+    ctx: &egui::Context,
+    s: &mut SettingsUi,
+    cmd: &mpsc::UnboundedSender<Command>,
+) {
+    let Some(action) = s.pending_admin else { return };
+    let mut confirm = false;
+    let mut cancel = false;
+    egui::Window::new(format!("Confirm: {}", action.label()))
+        .collapsible(false)
+        .resizable(false)
+        .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+        .show(ctx, |ui| {
+            ui.set_min_width(360.0);
+            if action.is_destructive() {
+                ui.colored_label(egui::Color32::LIGHT_RED, "⚠ Destructive action");
+            }
+            ui.label(action.warning());
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                if ui.button("Cancel").clicked() {
+                    cancel = true;
+                }
+                let confirm_btn = if action.is_destructive() {
+                    egui::Button::new("Yes, do it").fill(egui::Color32::from_rgb(150, 40, 40))
+                } else {
+                    egui::Button::new("Confirm")
+                };
+                if ui.add(confirm_btn).clicked() {
+                    confirm = true;
+                }
+            });
+        });
+    if confirm {
+        let _ = cmd.send(Command::Admin(action));
+        s.last_save = Some(action.label().into());
+        s.pending_admin = None;
+    } else if cancel {
+        s.pending_admin = None;
     }
 }
 

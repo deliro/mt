@@ -87,7 +87,8 @@ impl DeviceSession {
                 | Command::SetDisplay(_)
                 | Command::SetBluetooth(_)
                 | Command::SetFixedPosition { .. }
-                | Command::RemoveFixedPosition => {}
+                | Command::RemoveFixedPosition
+                | Command::Admin(_) => {}
             }
         }
     }
@@ -147,7 +148,8 @@ async fn open_with_cancel(
                     | Command::SetDisplay(_)
                     | Command::SetBluetooth(_)
                     | Command::SetFixedPosition { .. }
-                    | Command::RemoveFixedPosition,
+                    | Command::RemoveFixedPosition
+                    | Command::Admin(_),
                 ) => {
                     debug!("ignoring command while connecting");
                 }
@@ -424,6 +426,7 @@ async fn handle_config_command(
             send_set_fixed_position(sink, my_node, latitude_deg, longitude_deg, altitude_m).await
         }
         Command::RemoveFixedPosition => send_remove_fixed_position(sink, my_node).await,
+        Command::Admin(action) => send_admin_action(sink, my_node, action).await,
         Command::Connect(_)
         | Command::Disconnect
         | Command::SendText { .. }
@@ -601,6 +604,28 @@ async fn send_remove_fixed_position(
         payload_variant: Some(meshtastic::admin_message::PayloadVariant::RemoveFixedPosition(
             true,
         )),
+        ..Default::default()
+    };
+    send_admin(sink, my_node, admin).await
+}
+
+async fn send_admin_action(
+    sink: &mut Pin<Box<impl futures::Sink<Vec<u8>, Error = crate::transport::TransportError> + ?Sized>>,
+    my_node: NodeId,
+    action: crate::session::commands::AdminAction,
+) -> Result<(), ConnectError> {
+    use crate::session::commands::AdminAction;
+    use meshtastic::admin_message::PayloadVariant;
+    let variant = match action {
+        AdminAction::Reboot { seconds } => PayloadVariant::RebootSeconds(seconds),
+        AdminAction::Shutdown { seconds } => PayloadVariant::ShutdownSeconds(seconds),
+        AdminAction::RebootOta { seconds } => PayloadVariant::RebootOtaSeconds(seconds),
+        AdminAction::FactoryResetDevice => PayloadVariant::FactoryResetDevice(1),
+        AdminAction::FactoryResetConfig => PayloadVariant::FactoryResetConfig(1),
+        AdminAction::NodedbReset => PayloadVariant::NodedbReset(true),
+    };
+    let admin = meshtastic::AdminMessage {
+        payload_variant: Some(variant),
         ..Default::default()
     };
     send_admin(sink, my_node, admin).await
