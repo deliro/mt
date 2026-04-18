@@ -62,6 +62,11 @@ pub struct AppState {
     /// on the currently active tab. Consumed the same frame by the
     /// corresponding tab's renderer.
     pub focus_search: bool,
+    /// Wall-clock time of the most recent MQTT proxy packet from the device.
+    /// Populated whenever firmware forwards something to / from its MQTT
+    /// broker via the phone API (phone-proxy mode); used by the status bar
+    /// to distinguish "configured" from "actively bridging".
+    pub mqtt_last_proxy: Option<Instant>,
 }
 
 #[derive(Default)]
@@ -150,6 +155,7 @@ impl App {
             Event::ExtNotifUpdated(s) => self.state.snapshot.ext_notif = Some(s),
             Event::CannedUpdated(s) => self.state.snapshot.canned = Some(s),
             Event::RangeTestUpdated(s) => self.state.snapshot.range_test = Some(s),
+            Event::MqttProxyActivity => self.state.mqtt_last_proxy = Some(Instant::now()),
             Event::StatsUpdated(stats) => self.state.snapshot.stats.merge(&stats),
             Event::TracerouteResult(result) => {
                 let target = result.target;
@@ -388,6 +394,7 @@ const fn is_activity(ev: &Event) -> bool {
             | Event::ExtNotifUpdated(_)
             | Event::CannedUpdated(_)
             | Event::RangeTestUpdated(_)
+            | Event::MqttProxyActivity
             | Event::StatsUpdated(_)
             | Event::TracerouteResult(_)
             | Event::TracerouteFailed { .. }

@@ -26,6 +26,7 @@ pub fn render(ui: &mut egui::Ui, state: &AppState) {
                 ui.separator();
                 render_link_health(ui, state.last_activity);
                 render_mesh_stats(ui, &state.snapshot.stats);
+                render_mqtt(ui, state);
             }
         }
         if let Some(err) = &state.last_error {
@@ -40,6 +41,45 @@ fn render_mesh_stats(ui: &mut egui::Ui, stats: &MeshStats) {
     render_chutil(ui, stats);
     render_airtime(ui, stats);
     render_relay(ui, stats);
+}
+
+fn render_mqtt(ui: &mut egui::Ui, state: &AppState) {
+    let Some(mqtt) = state.snapshot.mqtt.as_ref() else { return };
+    if !mqtt.enabled {
+        return;
+    }
+    ui.separator();
+    if mqtt.proxy_to_client_enabled {
+        render_mqtt_proxy(ui, state);
+    } else {
+        ui.colored_label(egui::Color32::GRAY, "mqtt direct")
+            .on_hover_text(
+                "Device is configured to connect to its MQTT broker directly via Wi-Fi / \
+                 Ethernet. Actual broker connectivity is not reported over the phone API, \
+                 so this is an intent indicator only.",
+            );
+    }
+}
+
+fn render_mqtt_proxy(ui: &mut egui::Ui, state: &AppState) {
+    let recent = state
+        .mqtt_last_proxy
+        .and_then(|t| Instant::now().checked_duration_since(t))
+        .is_some_and(|d| d.as_secs() < 120);
+    if recent {
+        ui.colored_label(egui::Color32::LIGHT_GREEN, "● mqtt via phone")
+            .on_hover_text(
+                "Device is forwarding MQTT traffic through this client. A proxy packet \
+                 has been seen within the last 2 minutes.",
+            );
+    } else {
+        ui.colored_label(egui::Color32::YELLOW, "○ mqtt via phone")
+            .on_hover_text(
+                "Device is configured for phone-proxy MQTT but no proxy traffic has been \
+                 seen in the last 2 minutes — broker may be unreachable or nothing has \
+                 needed forwarding yet.",
+            );
+    }
 }
 
 fn render_battery(ui: &mut egui::Ui, stats: &MeshStats) {

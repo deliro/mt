@@ -67,6 +67,7 @@ pub enum Event {
     ExtNotifUpdated(crate::domain::config::ExternalNotificationSettings),
     CannedUpdated(crate::domain::config::CannedMessageSettings),
     RangeTestUpdated(crate::domain::config::RangeTestSettings),
+    MqttProxyActivity,
     StatsUpdated(MeshStats),
     TracerouteResult(crate::domain::traceroute::TracerouteResult),
     TracerouteFailed { target: NodeId, reason: String },
@@ -1419,6 +1420,9 @@ fn incoming_outcomes(msg: meshtastic::FromRadio, my_node: NodeId) -> Vec<Incomin
             id: PacketId(qs.mesh_packet_id),
             state: DeliveryState::Failed(format!("device queue rejected ({})", qs.res)),
         }],
+        PayloadVariant::MqttClientProxyMessage(_) => {
+            vec![IncomingOutcome::Event(Event::MqttProxyActivity)]
+        }
         PayloadVariant::MyInfo(_)
         | PayloadVariant::ConfigCompleteId(_)
         | PayloadVariant::Rebooted(_)
@@ -1426,7 +1430,6 @@ fn incoming_outcomes(msg: meshtastic::FromRadio, my_node: NodeId) -> Vec<Incomin
         | PayloadVariant::Metadata(_)
         | PayloadVariant::FileInfo(_)
         | PayloadVariant::LogRecord(_)
-        | PayloadVariant::MqttClientProxyMessage(_)
         | PayloadVariant::ClientNotification(_)
         | PayloadVariant::DeviceuiConfig(_) => Vec::new(),
     }
