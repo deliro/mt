@@ -5,12 +5,14 @@ use rand::RngCore;
 use tokio::sync::mpsc;
 
 use crate::domain::channel::{Channel, ChannelRole};
+use crate::domain::channel_url;
 use crate::domain::ids::ChannelIndex;
 use crate::domain::snapshot::DeviceSnapshot;
 use crate::session::commands::Command;
 
 pub const MAX_CHANNELS: u8 = 8;
-const PSK_BYTES: usize = 32;
+const PSK_BYTES_256: usize = 32;
+const PSK_BYTES_128: usize = 16;
 const DEFAULT_PRESET: u8 = 1;
 
 #[derive(Default)]
@@ -20,6 +22,10 @@ pub struct ChannelsUi {
     pub pending_save: Option<u8>,
     pub last_save: Option<String>,
     pub expanded: HashSet<u8>,
+    pub import_open: bool,
+    pub import_draft: String,
+    pub import_error: Option<String>,
+    pub last_copied_url: Option<String>,
 }
 
 pub fn render(
@@ -30,12 +36,14 @@ pub fn render(
 ) {
     sync_from_snapshot(snapshot, chs);
     confirm_save_modal(ui.ctx(), chs, cmd);
+    import_modal(ui.ctx(), chs);
     egui::ScrollArea::vertical().auto_shrink([false; 2]).show(ui, |ui| {
         ui.heading("Channels");
         ui.label(
             "Changes are applied individually. Editing the PSK or role of a shared channel \
              disconnects anyone who does not pick up the new setting.",
         );
+        share_bar(ui, chs);
         if let Some(msg) = chs.last_save.as_ref() {
             ui.colored_label(egui::Color32::LIGHT_GREEN, format!("Saved: {msg}"));
         }
@@ -45,6 +53,105 @@ pub fn render(
             ui.separator();
         }
     });
+}
+
+fn share_bar(ui: &mut egui::Ui, chs: &mut ChannelsUi) {
+    ui.horizontal(|ui| {
+        if ui
+            .button("Copy share URL")
+            .on_hover_text(
+                "Copy a meshtastic.org/e/# link representing the current channel drafts. \
+                 Paste the URL into any other Meshtastic client to join this mesh.",
+            )
+            .clicked()
+        {
+            let channels: Vec<_> = (0..MAX_CHANNELS)
+                .filter_map(|i| chs.drafts.get(&i).cloned())
+                .collect();
+            let url = channel_url::encode(&channels);
+            ui.ctx().copy_text(url.clone());
+            chs.last_copied_url = Some(url);
+        }
+        if ui
+            .button("Import from URL…")
+            .on_hover_text(
+                "Paste a meshtastic.org/e/# link from another device to replace the channel drafts. \
+                 You still need to hit Save on each slot afterwards.",
+            )
+            .clicked()
+        {
+            chs.import_open = true;
+            chs.import_error = None;
+        }
+    });
+    if let Some(url) = chs.last_copied_url.as_ref() {
+        ui.colored_label(egui::Color32::LIGHT_GREEN, "Share URL copied to clipboard.")
+            .on_hover_text(url.as_str());
+    }
+}
+
+fn import_modal(ctx: &egui::Context, chs: &mut ChannelsUi) {
+    if !chs.import_open {
+        return;
+    }
+    let mut open = chs.import_open;
+    let mut apply = false;
+    egui::Window::new("Import channels from URL")
+        .open(&mut open)
+        .collapsible(false)
+        .resizable(false)
+        .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+        .show(ctx, |ui| {
+            ui.set_min_width(420.0);
+            ui.label("Paste the full meshtastic.org/e/# link:");
+            ui.add(egui::TextEdit::multiline(&mut chs.import_draft).desired_rows(3));
+            if let Some(err) = chs.import_error.as_ref() {
+                ui.colored_label(egui::Color32::LIGHT_RED, err);
+            }
+            ui.colored_label(
+                egui::Color32::LIGHT_RED,
+                "⚠ Import overwrites every channel draft. Disabled slots are preserved as Disabled.",
+            );
+            ui.horizontal(|ui| {
+                if ui.button("Cancel").clicked() {
+                    chs.import_open = false;
+                }
+                if ui
+                    .add(egui::Button::new("Load into drafts").fill(egui::Color32::from_rgb(60, 110, 60)))
+                    .clicked()
+                {
+                    apply = true;
+                }
+            });
+        });
+    chs.import_open = open && !apply;
+    if apply {
+        apply_import(chs);
+    }
+}
+
+fn apply_import(chs: &mut ChannelsUi) {
+    match channel_url::decode(&chs.import_draft) {
+        Ok(imported) => {
+            for index in 0..MAX_CHANNELS {
+                let draft = imported
+                    .iter()
+                    .find(|c| c.index.get() == index)
+                    .cloned()
+                    .unwrap_or_else(|| empty_channel(index));
+                let _ = chs.drafts.insert(index, draft);
+                let _ = chs.dirty.insert(index);
+                let _ = chs.expanded.insert(index);
+            }
+            chs.import_open = false;
+            chs.import_draft.clear();
+            chs.import_error = None;
+            chs.last_save = Some("imported — review each slot and press Save".into());
+        }
+        Err(e) => {
+            chs.import_error = Some(e.to_string());
+        }
+    }
 }
 
 fn sync_from_snapshot(snapshot: &DeviceSnapshot, chs: &mut ChannelsUi) {
@@ -175,18 +282,29 @@ fn psk_controls(ui: &mut egui::Ui, draft: &mut Channel) -> bool {
     });
     ui.horizontal(|ui| {
         if ui
-            .button("Regenerate (AES256)")
+            .button("Regen AES256")
             .on_hover_text(
-                "Replace the key with 32 fresh random bytes. Everyone still using the old key \
-                 will stop seeing messages on this channel.",
+                "Replace the key with 32 fresh random bytes (AES256). Everyone still using the \
+                 old key will stop seeing messages on this channel.",
             )
             .clicked()
         {
-            draft.psk = random_psk();
+            draft.psk = random_psk(PSK_BYTES_256);
             changed = true;
         }
         if ui
-            .button("Use default preset")
+            .button("Regen AES128")
+            .on_hover_text(
+                "Replace the key with 16 fresh random bytes (AES128). Slightly cheaper airtime \
+                 than AES256 and still beyond brute-force; accepted by every current firmware.",
+            )
+            .clicked()
+        {
+            draft.psk = random_psk(PSK_BYTES_128);
+            changed = true;
+        }
+        if ui
+            .button("Default preset")
             .on_hover_text("Set PSK to the 1-byte indexed default — equivalent to the stock key.")
             .clicked()
         {
@@ -194,7 +312,7 @@ fn psk_controls(ui: &mut egui::Ui, draft: &mut Channel) -> bool {
             changed = true;
         }
         if ui
-            .button("Clear (no encryption)")
+            .button("Clear")
             .on_hover_text("Remove the PSK. Traffic on this channel becomes unencrypted.")
             .clicked()
         {
@@ -317,8 +435,8 @@ fn save_warning(index: u8, draft: &Channel) -> &'static str {
     }
 }
 
-fn random_psk() -> Vec<u8> {
-    let mut buf = vec![0u8; PSK_BYTES];
+fn random_psk(bytes: usize) -> Vec<u8> {
+    let mut buf = vec![0u8; bytes];
     rand::thread_rng().fill_bytes(&mut buf);
     buf
 }
