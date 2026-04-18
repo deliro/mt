@@ -494,7 +494,6 @@ async fn send_text(
     let data = meshtastic::Data {
         portnum: meshtastic::PortNum::TextMessageApp as i32,
         payload: text.as_bytes().to_vec(),
-        want_response: want_ack,
         ..Default::default()
     };
     let packet = meshtastic::MeshPacket {
