@@ -108,27 +108,32 @@ fn filtered_nodes<'a>(snapshot: &'a DeviceSnapshot, query: &str) -> Vec<&'a Node
 struct NodeCounts {
     total: usize,
     online: usize,
-    cached: usize,
+    idle: usize,
+    archived: usize,
 }
 
 impl NodeCounts {
     fn compute(snapshot: &DeviceSnapshot, nodes_ui: &NodesUi, now: SystemTime) -> Self {
         let total = snapshot.nodes.len();
-        let online = snapshot
-            .nodes
-            .values()
-            .filter(|n| {
-                n.last_heard
-                    .and_then(|t| now.duration_since(t).ok())
-                    .is_some_and(|d| d <= ONLINE_THRESHOLD)
-            })
-            .count();
-        let cached = snapshot
-            .nodes
-            .keys()
-            .filter(|id| !nodes_ui.seen_live.contains(id))
-            .count();
-        Self { total, online, cached }
+        let mut online: usize = 0;
+        let mut idle: usize = 0;
+        let mut archived: usize = 0;
+        for (id, node) in &snapshot.nodes {
+            if !nodes_ui.seen_live.contains(id) {
+                archived = archived.saturating_add(1);
+                continue;
+            }
+            let fresh = node
+                .last_heard
+                .and_then(|t| now.duration_since(t).ok())
+                .is_some_and(|d| d <= ONLINE_THRESHOLD);
+            if fresh {
+                online = online.saturating_add(1);
+            } else {
+                idle = idle.saturating_add(1);
+            }
+        }
+        Self { total, online, idle, archived }
     }
 }
 
@@ -143,10 +148,21 @@ fn toolbar(ui: &mut egui::Ui, nodes_ui: &mut NodesUi, shown: usize, counts: Node
             egui::Color32::from_rgb(120, 200, 120),
             format!("● {} online", counts.online),
         )
-        .on_hover_text("Nodes heard on the mesh within the last 2 hours.");
-        ui.colored_label(egui::Color32::GRAY, format!("○ {} cached", counts.cached))
+        .on_hover_text(
+            "In the device's NodeDB and heard on the mesh within the last 2 hours.",
+        );
+        ui.colored_label(
+            egui::Color32::from_rgb(170, 170, 120),
+            format!("◐ {} idle", counts.idle),
+        )
+        .on_hover_text(
+            "In the device's NodeDB but not heard in the last 2 hours — they're still \
+             tracked by the radio, just quiet.",
+        );
+        ui.colored_label(egui::Color32::GRAY, format!("○ {} archived", counts.archived))
             .on_hover_text(
-                "Nodes known only from the local database — not observed live this session.",
+                "Only in the local database; the device's NodeDB has dropped them. \
+                 Kept locally so chat history and display names survive.",
             );
         ui.separator();
         ui.label("Search:");
