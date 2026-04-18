@@ -76,6 +76,12 @@ pub enum Event {
         variant: &'static str,
         debug: String,
     },
+    LogRecord {
+        at: SystemTime,
+        level: i32,
+        source: String,
+        message: String,
+    },
     StatsUpdated(MeshStats),
     TracerouteResult(crate::domain::traceroute::TracerouteResult),
     TracerouteFailed { target: NodeId, reason: String },
@@ -1462,13 +1468,20 @@ fn incoming_outcomes(msg: meshtastic::FromRadio, my_node: NodeId) -> Vec<Incomin
         PayloadVariant::MqttClientProxyMessage(_) => {
             vec![IncomingOutcome::Event(Event::MqttProxyActivity)]
         }
+        PayloadVariant::LogRecord(rec) => {
+            vec![IncomingOutcome::Event(Event::LogRecord {
+                at: SystemTime::now(),
+                level: rec.level,
+                source: rec.source,
+                message: rec.message,
+            })]
+        }
         PayloadVariant::MyInfo(_)
         | PayloadVariant::ConfigCompleteId(_)
         | PayloadVariant::Rebooted(_)
         | PayloadVariant::XmodemPacket(_)
         | PayloadVariant::Metadata(_)
         | PayloadVariant::FileInfo(_)
-        | PayloadVariant::LogRecord(_)
         | PayloadVariant::ClientNotification(_)
         | PayloadVariant::DeviceuiConfig(_) => Vec::new(),
     }

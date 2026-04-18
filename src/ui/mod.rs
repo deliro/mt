@@ -5,6 +5,7 @@ pub mod details;
 pub mod firmware;
 pub mod fonts;
 pub mod inspector;
+pub mod logs;
 pub mod nodes;
 pub mod reconnect;
 pub mod remote_admin;
@@ -53,6 +54,7 @@ pub struct AppState {
     pub settings_ui: settings::SettingsUi,
     pub channels_ui: channels::ChannelsUi,
     pub inspector_ui: inspector::InspectorUi,
+    pub logs_ui: logs::LogsUi,
     pub traceroutes: TracerouteUi,
     pub remote_admin: remote_admin::RemoteAdminUi,
     pub probed_nodes: std::collections::HashSet<NodeId>,
@@ -91,6 +93,7 @@ pub enum Tab {
     Channels,
     Settings,
     Inspector,
+    Logs,
 }
 
 pub struct App {
@@ -194,6 +197,9 @@ impl App {
             Event::InspectorFrame { at, frame_size, variant, debug } => {
                 self.state.inspector_ui.push(at, frame_size, variant, debug);
             }
+            Event::LogRecord { at, level, source, message } => {
+                self.state.logs_ui.push(at, level, source, message);
+            }
             Event::StatsUpdated(stats) => self.state.snapshot.stats.merge(&stats),
             Event::TracerouteResult(result) => {
                 let target = result.target;
@@ -256,6 +262,7 @@ impl App {
                     Tab::Chat => self.state.chat_ui.search.clear(),
                     Tab::Nodes => self.state.nodes_ui.search.clear(),
                     Tab::Inspector => self.state.inspector_ui.filter.clear(),
+                    Tab::Logs => self.state.logs_ui.filter.clear(),
                     Tab::Channels | Tab::Settings => {}
                 }
             }
@@ -459,6 +466,7 @@ const fn is_activity(ev: &Event) -> bool {
             | Event::RangeTestUpdated(_)
             | Event::MqttProxyActivity
             | Event::InspectorFrame { .. }
+            | Event::LogRecord { .. }
             | Event::StatsUpdated(_)
             | Event::TracerouteResult(_)
             | Event::TracerouteFailed { .. }
@@ -571,6 +579,7 @@ impl App {
             ui.selectable_value(&mut self.state.active_tab, Tab::Channels, "Channels");
             ui.selectable_value(&mut self.state.active_tab, Tab::Settings, "Settings");
             ui.selectable_value(&mut self.state.active_tab, Tab::Inspector, "Inspector");
+            ui.selectable_value(&mut self.state.active_tab, Tab::Logs, "Logs");
         });
     }
 
@@ -618,6 +627,11 @@ impl App {
             Tab::Inspector => {
                 egui::CentralPanel::default().show(ctx, |ui| {
                     inspector::render(ui, &mut self.state.inspector_ui);
+                });
+            }
+            Tab::Logs => {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    logs::render(ui, &mut self.state.logs_ui);
                 });
             }
         }
