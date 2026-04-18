@@ -1,10 +1,14 @@
-use std::time::SystemTime;
+use std::collections::HashMap;
+use std::time::{Duration, Instant, SystemTime};
 
 use eframe::egui;
 use egui_extras::{Column, TableBuilder};
 
+use crate::domain::ids::NodeId;
 use crate::domain::node::Node;
 use crate::domain::snapshot::DeviceSnapshot;
+
+const FLASH_DURATION: Duration = Duration::from_millis(1500);
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Default)]
 pub enum NodesSort {
@@ -34,12 +38,40 @@ impl NodesSort {
 pub struct NodesUi {
     pub sort: NodesSort,
     pub ascending: bool,
+    pub recently_updated: HashMap<NodeId, Instant>,
+}
+
+impl NodesUi {
+    pub fn mark_updated(&mut self, id: NodeId) {
+        let _ = self.recently_updated.insert(id, Instant::now());
+    }
+
+    fn flash_alpha(&self, id: NodeId, now: Instant) -> f32 {
+        self.recently_updated
+            .get(&id)
+            .and_then(|t| now.checked_duration_since(*t))
+            .filter(|d| *d < FLASH_DURATION)
+            .map_or(0.0, |d| {
+                1.0 - d.as_secs_f32() / FLASH_DURATION.as_secs_f32()
+            })
+    }
+
+    fn any_flashing(&self, now: Instant) -> bool {
+        self.recently_updated.values().any(|t| {
+            now.checked_duration_since(*t).is_some_and(|d| d < FLASH_DURATION)
+        })
+    }
 }
 
 pub fn render(ui: &mut egui::Ui, snapshot: &DeviceSnapshot, nodes_ui: &mut NodesUi) {
-    let now = SystemTime::now();
+    let now_system = SystemTime::now();
+    let now_inst = Instant::now();
     let mut nodes: Vec<&Node> = snapshot.nodes.values().collect();
     sort_nodes(&mut nodes, nodes_ui.sort, nodes_ui.ascending);
+
+    if nodes_ui.any_flashing(now_inst) {
+        ui.ctx().request_repaint_after(Duration::from_millis(16));
+    }
 
     ui.horizontal(|ui| {
         ui.label(format!("{} nodes", nodes.len()));
@@ -85,31 +117,41 @@ pub fn render(ui: &mut egui::Ui, snapshot: &DeviceSnapshot, nodes_ui: &mut Nodes
         })
         .body(|mut body| {
             for node in nodes {
+                let alpha = nodes_ui.flash_alpha(node.id, now_inst);
+                let flash = (alpha > 0.0).then(|| flash_color(alpha));
                 body.row(18.0, |mut row| {
                     row.col(|ui| {
+                        paint_flash(ui, flash);
                         ui.label(display_name(node));
                     });
                     row.col(|ui| {
+                        paint_flash(ui, flash);
                         ui.label(&node.short_name);
                     });
                     row.col(|ui| {
+                        paint_flash(ui, flash);
                         ui.label(format!("{:?}", node.role));
                     });
                     row.col(|ui| {
+                        paint_flash(ui, flash);
                         ui.label(
                             node.battery_level.map_or_else(|| "—".into(), |b| format!("{b}%")),
                         );
                     });
                     row.col(|ui| {
+                        paint_flash(ui, flash);
                         ui.label(node.snr_db.map_or_else(|| "—".into(), |s| format!("{s:.1}")));
                     });
                     row.col(|ui| {
+                        paint_flash(ui, flash);
                         ui.label(node.hops_away.map_or_else(|| "—".into(), |h| format!("{h}")));
                     });
                     row.col(|ui| {
-                        ui.label(format_last_heard(node.last_heard, now));
+                        paint_flash(ui, flash);
+                        ui.label(format_last_heard(node.last_heard, now_system));
                     });
                     row.col(|ui| {
+                        paint_flash(ui, flash);
                         let pos = node.position.as_ref().map_or_else(
                             || "—".into(),
                             |p| format!("{:.4}, {:.4}", p.latitude_deg, p.longitude_deg),
@@ -119,6 +161,18 @@ pub fn render(ui: &mut egui::Ui, snapshot: &DeviceSnapshot, nodes_ui: &mut Nodes
                 });
             }
         });
+}
+
+fn flash_color(alpha: f32) -> egui::Color32 {
+    let a = (alpha * 140.0).clamp(0.0, 255.0) as u8;
+    egui::Color32::from_rgba_unmultiplied(90, 170, 240, a)
+}
+
+fn paint_flash(ui: &egui::Ui, color: Option<egui::Color32>) {
+    if let Some(color) = color {
+        let rect = ui.max_rect();
+        ui.painter().rect_filled(rect, 0.0, color);
+    }
 }
 
 fn display_name(node: &Node) -> String {

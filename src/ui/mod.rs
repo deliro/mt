@@ -6,6 +6,7 @@ pub mod settings;
 pub mod status;
 
 use std::path::PathBuf;
+use std::time::Instant;
 
 use eframe::egui;
 use tokio::sync::mpsc;
@@ -30,6 +31,7 @@ pub struct AppState {
     pub profiles: Vec<ConnectionProfile>,
     pub last_error: Option<String>,
     pub active_tab: Tab,
+    pub last_activity: Option<Instant>,
     pub connect_ui: connect::ConnectUi,
     pub scan_ui: scan::ScanUi,
     pub chat_ui: chat::ChatUi,
@@ -80,6 +82,18 @@ impl App {
     }
 
     fn reduce(&mut self, ev: Event) {
+        let counts_as_activity = matches!(
+            ev,
+            Event::Connected(_)
+                | Event::NodeUpdated(_)
+                | Event::ChannelUpdated(_)
+                | Event::LoraUpdated(_)
+                | Event::MessageReceived(_)
+                | Event::MessageStateChanged { .. }
+        );
+        if counts_as_activity {
+            self.state.last_activity = Some(Instant::now());
+        }
         match ev {
             Event::Connecting => {
                 self.state.status = SessionStatus::Connecting;
@@ -98,6 +112,7 @@ impl App {
                         self.state.snapshot.short_name.clone_from(&node.short_name);
                     }
                 }
+                self.state.nodes_ui.mark_updated(node.id);
                 let _ = self.state.snapshot.nodes.insert(node.id, node);
             }
             Event::ChannelUpdated(ch) => {
@@ -116,6 +131,7 @@ impl App {
             }
             Event::Disconnected => {
                 self.state.status = SessionStatus::Disconnected;
+                self.state.last_activity = None;
             }
             Event::Error(msg) => {
                 self.state.last_error = Some(msg);
