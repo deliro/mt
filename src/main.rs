@@ -5,7 +5,7 @@ use std::sync::Arc;
 use eframe::NativeOptions;
 use futures::FutureExt;
 use mt::domain::profile::{ConnectionProfile, TransportKind};
-use mt::persist::messages::{MessageStore, default_path as messages_path};
+use mt::persist::history::{HistoryStore, default_path as history_path};
 use mt::persist::profiles::{default_path, load_from};
 use mt::session::commands::Command;
 use mt::session::{DeviceSession, Event};
@@ -21,10 +21,10 @@ fn main() -> eframe::Result<()> {
 
     let profiles_path = default_path();
     let profiles = load_from(&profiles_path).unwrap_or_default();
-    let store = match MessageStore::open(&messages_path()) {
+    let store = match HistoryStore::open(&history_path()) {
         Ok(s) => Some(s),
         Err(e) => {
-            tracing::warn!(%e, "failed to open message history; running without persistence");
+            tracing::warn!(%e, "failed to open history db; running without persistence");
             None
         }
     };

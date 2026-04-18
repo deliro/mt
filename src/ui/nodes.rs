@@ -40,6 +40,8 @@ pub struct NodesUi {
     pub ascending: bool,
     pub search: String,
     pub recently_updated: HashMap<NodeId, Instant>,
+    pub seen_live: std::collections::HashSet<NodeId>,
+    pub persisted_saved_at: HashMap<NodeId, SystemTime>,
 }
 
 impl NodesUi {
@@ -169,22 +171,48 @@ fn table(
             for node in nodes {
                 let alpha = nodes_ui.flash_alpha(node.id, now_inst);
                 let flash = (alpha > 0.0).then(|| flash_color(alpha));
-                body.row(18.0, |row| row_cells(row, node, flash, detail_node, now_system));
+                let is_cached = !nodes_ui.seen_live.contains(&node.id);
+                let cached_saved_at = nodes_ui.persisted_saved_at.get(&node.id).copied();
+                let mut ctx = RowContext {
+                    flash,
+                    detail_node,
+                    now_system,
+                    is_cached,
+                    cached_saved_at,
+                };
+                body.row(18.0, |row| row_cells(row, node, &mut ctx));
             }
         });
 }
 
-fn row_cells(
+struct RowContext<'a> {
+    flash: Option<egui::Color32>,
+    detail_node: &'a mut Option<NodeId>,
+    now_system: SystemTime,
+    is_cached: bool,
+    cached_saved_at: Option<SystemTime>,
+}
+
+fn row_cells(row: egui_extras::TableRow<'_, '_>, node: &Node, ctx: &mut RowContext<'_>) {
+    row_cells_inner(row, node, ctx);
+}
+
+fn row_cells_inner(
     mut row: egui_extras::TableRow<'_, '_>,
     node: &Node,
-    flash: Option<egui::Color32>,
-    detail_node: &mut Option<NodeId>,
-    now_system: SystemTime,
+    ctx: &mut RowContext<'_>,
 ) {
+    let flash = ctx.flash;
     row.col(|ui| {
         paint_flash(ui, flash);
-        if ui.add(egui::Label::new(display_name(node)).sense(egui::Sense::click())).clicked() {
-            *detail_node = Some(node.id);
+        let name = display_name(node);
+        let label = if ctx.is_cached {
+            egui::Label::new(egui::RichText::new(name).weak())
+        } else {
+            egui::Label::new(name)
+        };
+        if ui.add(label.sense(egui::Sense::click())).clicked() {
+            *ctx.detail_node = Some(node.id);
         }
     });
     row.col(|ui| {
@@ -209,7 +237,16 @@ fn row_cells(
     });
     row.col(|ui| {
         paint_flash(ui, flash);
-        ui.label(format_last_heard(node.last_heard, now_system));
+        if ctx.is_cached {
+            let primary = format_last_heard(node.last_heard, ctx.now_system);
+            let cached_age = format_cached_age(ctx.cached_saved_at, ctx.now_system);
+            ui.colored_label(
+                egui::Color32::GRAY,
+                format!("{primary} (cached {cached_age})"),
+            );
+        } else {
+            ui.label(format_last_heard(node.last_heard, ctx.now_system));
+        }
     });
     row.col(|ui| {
         paint_flash(ui, flash);
@@ -219,6 +256,21 @@ fn row_cells(
         );
         ui.label(pos);
     });
+}
+
+fn format_cached_age(saved_at: Option<SystemTime>, now: SystemTime) -> String {
+    let Some(t) = saved_at else { return "—".into() };
+    let Ok(d) = now.duration_since(t) else { return "just now".into() };
+    let secs = d.as_secs();
+    if secs < 60 {
+        format!("{secs}s ago")
+    } else if secs < 3_600 {
+        format!("{}m ago", secs.div_euclid(60))
+    } else if secs < 86_400 {
+        format!("{}h ago", secs.div_euclid(3_600))
+    } else {
+        format!("{}d ago", secs.div_euclid(86_400))
+    }
 }
 
 fn flash_color(alpha: f32) -> egui::Color32 {

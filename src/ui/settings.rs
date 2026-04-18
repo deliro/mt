@@ -26,11 +26,21 @@ pub enum Section {
     Bluetooth,
 }
 
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum PendingClear {
+    Messages,
+    Nodes,
+    All,
+}
+
 #[derive(Default)]
 pub struct SettingsUi {
     pub draft: Draft,
     pub dirty: DirtySet,
     pub last_save: Option<String>,
+    pub pending_clear: Option<PendingClear>,
+    pub stored_messages: Option<i64>,
+    pub stored_nodes: Option<i64>,
 }
 
 #[derive(Default, Clone)]
@@ -84,6 +94,7 @@ fn sections(ui: &mut egui::Ui, s: &mut SettingsUi, cmd: &mpsc::UnboundedSender<C
     collapsible(ui, "Network", |ui| network_section(ui, s, cmd));
     collapsible(ui, "Display", |ui| display_section(ui, s, cmd));
     collapsible(ui, "Bluetooth", |ui| bluetooth_section(ui, s, cmd));
+    collapsible(ui, "Storage", |ui| storage_section(ui, s));
     if let Some(saved) = &s.last_save {
         ui.separator();
         ui.colored_label(
@@ -91,6 +102,26 @@ fn sections(ui: &mut egui::Ui, s: &mut SettingsUi, cmd: &mpsc::UnboundedSender<C
             format!("{saved} applied (device may reboot)"),
         );
     }
+}
+
+fn storage_section(ui: &mut egui::Ui, s: &mut SettingsUi) {
+    let msgs = s.stored_messages.map_or_else(|| "?".into(), |n| n.to_string());
+    let nodes = s.stored_nodes.map_or_else(|| "?".into(), |n| n.to_string());
+    ui.label(format!("Stored messages for this device: {msgs}"));
+    ui.label(format!("Stored nodes for this device: {nodes}"));
+    ui.add_space(4.0);
+    ui.horizontal(|ui| {
+        if ui.button("Clear messages").clicked() {
+            s.pending_clear = Some(PendingClear::Messages);
+        }
+        if ui.button("Clear nodes").clicked() {
+            s.pending_clear = Some(PendingClear::Nodes);
+        }
+        if ui.button("Clear everything").clicked() {
+            s.pending_clear = Some(PendingClear::All);
+        }
+    });
+    ui.weak("Clears only the on-disk cache for this connected device. The mesh keeps its own copy.");
 }
 
 fn collapsible<R>(ui: &mut egui::Ui, title: &str, add: impl FnOnce(&mut egui::Ui) -> R) {

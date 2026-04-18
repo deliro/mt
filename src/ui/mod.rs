@@ -17,7 +17,7 @@ use tracing::warn;
 use crate::domain::ids::NodeId;
 use crate::domain::profile::ConnectionProfile;
 use crate::domain::snapshot::DeviceSnapshot;
-use crate::persist::messages::MessageStore;
+use crate::persist::history::HistoryStore;
 use crate::session::Event;
 use crate::session::commands::Command;
 
@@ -64,7 +64,7 @@ pub struct App {
     cmd_tx: mpsc::UnboundedSender<Command>,
     ev_rx: mpsc::Receiver<Event>,
     profiles_path: PathBuf,
-    store: Option<MessageStore>,
+    store: Option<HistoryStore>,
 }
 
 impl App {
@@ -73,7 +73,7 @@ impl App {
         profiles_path: PathBuf,
         cmd_tx: mpsc::UnboundedSender<Command>,
         ev_rx: mpsc::Receiver<Event>,
-        store: Option<MessageStore>,
+        store: Option<HistoryStore>,
     ) -> Self {
         Self {
             state: AppState { profiles, ..AppState::default() },
@@ -125,21 +125,11 @@ impl App {
 
     fn apply_connected(&mut self, snap: DeviceSnapshot) {
         self.state.status = SessionStatus::Connected;
+        self.state.nodes_ui.seen_live.clear();
+        self.state.nodes_ui.persisted_saved_at.clear();
         let mut snapshot = snap;
-        if let Some(store) = &self.store {
-            match store.load(snapshot.my_node) {
-                Ok(history) => {
-                    for m in history {
-                        snapshot.upsert_message(m);
-                    }
-                }
-                Err(e) => warn!(%e, "load message history failed"),
-            }
-            for m in snapshot.messages.clone() {
-                if let Err(e) = store.upsert(snapshot.my_node, &m) {
-                    warn!(%e, "persist handshake message failed");
-                }
-            }
+        if let Some(store) = self.store.as_ref() {
+            load_history(store, &mut snapshot, &mut self.state.nodes_ui.persisted_saved_at);
         }
         snapshot.messages.sort_by_key(|m| m.received_at);
         self.state.snapshot = snapshot;
@@ -155,16 +145,59 @@ impl App {
             }
         }
         self.state.nodes_ui.mark_updated(node.id);
+        let _ = self.state.nodes_ui.seen_live.insert(node.id);
+        if let Some(store) = &self.store
+            && let Err(e) = store.upsert_node(self.state.snapshot.my_node, &node)
+        {
+            warn!(%e, "persist node failed");
+        }
         let _ = self.state.snapshot.nodes.insert(node.id, node);
     }
 
     fn apply_message_received(&mut self, m: crate::domain::message::TextMessage) {
         if let Some(store) = &self.store
-            && let Err(e) = store.upsert(self.state.snapshot.my_node, &m)
+            && let Err(e) = store.upsert_message(self.state.snapshot.my_node, &m)
         {
             warn!(%e, "persist message failed");
         }
         self.state.snapshot.upsert_message(m);
+    }
+
+    fn refresh_storage_counts(&mut self) {
+        let Some(store) = self.store.as_ref() else {
+            self.state.settings_ui.stored_messages = None;
+            self.state.settings_ui.stored_nodes = None;
+            return;
+        };
+        let my = self.state.snapshot.my_node;
+        self.state.settings_ui.stored_messages = store.message_count(my).ok();
+        self.state.settings_ui.stored_nodes = store.node_count(my).ok();
+    }
+
+    fn handle_clear(&mut self, kind: settings::PendingClear) {
+        use settings::PendingClear;
+        let Some(store) = self.store.as_ref() else { return };
+        let my = self.state.snapshot.my_node;
+        let clear_messages = matches!(kind, PendingClear::Messages | PendingClear::All);
+        let clear_nodes = matches!(kind, PendingClear::Nodes | PendingClear::All);
+        if clear_messages {
+            if let Err(e) = store.clear_messages(my) {
+                warn!(%e, "clear messages failed");
+            } else {
+                self.state.snapshot.messages.clear();
+            }
+        }
+        if clear_nodes {
+            if let Err(e) = store.clear_nodes(my) {
+                warn!(%e, "clear nodes failed");
+            } else {
+                self.state
+                    .snapshot
+                    .nodes
+                    .retain(|id, _| self.state.nodes_ui.seen_live.contains(id));
+                self.state.nodes_ui.persisted_saved_at.clear();
+            }
+        }
     }
 
     fn apply_state_changed(
@@ -176,9 +209,44 @@ impl App {
             m.state = state.clone();
         }
         if let Some(store) = &self.store
-            && let Err(e) = store.update_state(self.state.snapshot.my_node, id, state)
+            && let Err(e) = store.update_message_state(self.state.snapshot.my_node, id, state)
         {
             warn!(%e, "persist state change failed");
+        }
+    }
+}
+
+fn load_history(
+    store: &HistoryStore,
+    snapshot: &mut DeviceSnapshot,
+    persisted_saved_at: &mut std::collections::HashMap<NodeId, std::time::SystemTime>,
+) {
+    match store.load_messages(snapshot.my_node) {
+        Ok(history) => {
+            for m in history {
+                snapshot.upsert_message(m);
+            }
+        }
+        Err(e) => warn!(%e, "load message history failed"),
+    }
+    match store.load_nodes(snapshot.my_node) {
+        Ok(saved_nodes) => {
+            for persisted in saved_nodes {
+                let id = persisted.node.id;
+                snapshot.nodes.entry(id).or_insert(persisted.node);
+                let _ = persisted_saved_at.insert(id, persisted.saved_at);
+            }
+        }
+        Err(e) => warn!(%e, "load node history failed"),
+    }
+    for m in snapshot.messages.clone() {
+        if let Err(e) = store.upsert_message(snapshot.my_node, &m) {
+            warn!(%e, "persist handshake message failed");
+        }
+    }
+    for node in snapshot.nodes.values() {
+        if let Err(e) = store.upsert_node(snapshot.my_node, node) {
+            warn!(%e, "persist handshake node failed");
         }
     }
 }
@@ -243,10 +311,14 @@ impl eframe::App for App {
                 });
             }
             Tab::Settings => {
+                self.refresh_storage_counts();
                 egui::CentralPanel::default().show(ctx, |ui| {
                     let AppState { snapshot, settings_ui, .. } = &mut self.state;
                     settings::render(ui, snapshot, settings_ui, &self.cmd_tx);
                 });
+                if let Some(kind) = self.state.settings_ui.pending_clear.take() {
+                    self.handle_clear(kind);
+                }
             }
         }
         details::render_overlay(ctx, &self.state.snapshot, &mut self.state.detail_node);
