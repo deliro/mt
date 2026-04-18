@@ -9,6 +9,7 @@ use crate::domain::snapshot::DeviceSnapshot;
 use crate::domain::traceroute::TracerouteResult;
 use crate::session::commands::Command;
 use crate::ui::{AppState, Tab, TracerouteUi};
+use crate::ui::nodes::NodesUi;
 
 pub fn render_overlay(
     ctx: &egui::Context,
@@ -30,6 +31,8 @@ pub fn render_overlay(
         match state.snapshot.nodes.get(&id) {
             Some(node) => {
                 render_body(ui, node);
+                ui.separator();
+                render_scorecard(ui, id, &state.nodes_ui);
                 ui.separator();
                 action = render_actions(ui, node, is_self, &state.traceroutes);
                 render_traceroute_section(ui, id, &state.traceroutes, &state.snapshot);
@@ -242,6 +245,48 @@ fn render_hops(
 
 const fn hop_arrow(i: usize) -> &'static str {
     if i == 0 { "•" } else { "→" }
+}
+
+fn render_scorecard(ui: &mut egui::Ui, id: NodeId, nodes_ui: &NodesUi) {
+    let Some(stats) = nodes_ui.session_stats.get(&id) else {
+        ui.label(
+            egui::RichText::new("This session: not heard yet.").weak(),
+        );
+        return;
+    };
+    let now = std::time::Instant::now();
+    let first = human_ago(now.saturating_duration_since(stats.first_heard).as_secs());
+    let last = human_ago(now.saturating_duration_since(stats.last_heard).as_secs());
+    ui.label(egui::RichText::new("This session").strong());
+    ui.label(format!(
+        "heard {} time{} · first {} · last {}",
+        stats.heard_count,
+        if stats.heard_count == 1 { "" } else { "s" },
+        first,
+        last,
+    ));
+    if let Some(avg) = stats.snr_avg() {
+        let min = stats.snr_min.unwrap_or(avg as f32);
+        let max = stats.snr_max.unwrap_or(avg as f32);
+        ui.label(format!(
+            "SNR: avg {avg:.1} dB, min {min:.1}, max {max:.1} ({} samples)",
+            stats.snr_samples,
+        ));
+    }
+}
+
+fn human_ago(secs: u64) -> String {
+    if secs < 5 {
+        "just now".into()
+    } else if secs < 60 {
+        format!("{secs}s ago")
+    } else if secs < 3_600 {
+        format!("{}m ago", secs.div_euclid(60))
+    } else if secs < 86_400 {
+        format!("{}h ago", secs.div_euclid(3_600))
+    } else {
+        format!("{}d ago", secs.div_euclid(86_400))
+    }
 }
 
 fn render_body(ui: &mut egui::Ui, node: &Node) {

@@ -307,6 +307,14 @@ impl App {
         for event in alerts::on_node(&self.state.alerts, &mut self.state.alerts_runtime, &node) {
             alerts::fire(&event);
         }
+        let now = Instant::now();
+        let stats = self
+            .state
+            .nodes_ui
+            .session_stats
+            .entry(node.id)
+            .or_insert_with(|| nodes::SessionStats::new(now));
+        stats.record(now, node.snr_db);
         if node.id == self.state.snapshot.my_node {
             if !node.long_name.is_empty() {
                 self.state.snapshot.long_name.clone_from(&node.long_name);

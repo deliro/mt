@@ -52,6 +52,50 @@ pub struct NodesUi {
     pub recently_updated: HashMap<NodeId, Instant>,
     pub seen_live: std::collections::HashSet<NodeId>,
     pub persisted_saved_at: HashMap<NodeId, SystemTime>,
+    pub session_stats: HashMap<NodeId, SessionStats>,
+}
+
+#[derive(Copy, Clone, Debug)]
+pub struct SessionStats {
+    pub heard_count: u32,
+    pub first_heard: Instant,
+    pub last_heard: Instant,
+    pub snr_min: Option<f32>,
+    pub snr_max: Option<f32>,
+    pub snr_sum: f64,
+    pub snr_samples: u32,
+}
+
+impl SessionStats {
+    pub fn new(now: Instant) -> Self {
+        Self {
+            heard_count: 0,
+            first_heard: now,
+            last_heard: now,
+            snr_min: None,
+            snr_max: None,
+            snr_sum: 0.0,
+            snr_samples: 0,
+        }
+    }
+
+    pub fn record(&mut self, now: Instant, snr: Option<f32>) {
+        self.heard_count = self.heard_count.saturating_add(1);
+        self.last_heard = now;
+        if let Some(s) = snr {
+            self.snr_min = Some(self.snr_min.map_or(s, |m| m.min(s)));
+            self.snr_max = Some(self.snr_max.map_or(s, |m| m.max(s)));
+            self.snr_sum += f64::from(s);
+            self.snr_samples = self.snr_samples.saturating_add(1);
+        }
+    }
+
+    pub fn snr_avg(&self) -> Option<f64> {
+        if self.snr_samples == 0 {
+            return None;
+        }
+        Some(self.snr_sum / f64::from(self.snr_samples))
+    }
 }
 
 impl NodesUi {
