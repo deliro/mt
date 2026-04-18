@@ -29,6 +29,17 @@ use crate::transport::BoxedTransport;
 pub const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(300);
 pub const ACK_TIMEOUT: Duration = Duration::from_secs(30);
 pub const MY_INFO_TIMEOUT: Duration = Duration::from_secs(15);
+/// Kill the session if no frame arrives for this long.
+///
+/// The radio emits position / telemetry / node-info far more often than this on
+/// any live link, so the watchdog only trips after a real disconnect — e.g.
+/// laptop suspend/resume leaving a stale BLE handle that silently drops writes.
+pub const RX_WATCHDOG: Duration = Duration::from_secs(420);
+/// Cap on how long a single heartbeat write may block.
+///
+/// Protects against OS-level buffering where the underlying socket is dead but
+/// `Sink::send` never errors.
+const HEARTBEAT_SEND_TIMEOUT: Duration = Duration::from_secs(10);
 
 trait FrameSink: futures::Sink<Vec<u8>, Error = crate::transport::TransportError> {}
 impl<T: ?Sized + futures::Sink<Vec<u8>, Error = crate::transport::TransportError>> FrameSink for T {}
@@ -319,18 +330,25 @@ async fn run_ready_loop(
     heartbeat.set_missed_tick_behavior(MissedTickBehavior::Delay);
     let _ = heartbeat.tick().await;
     let mut pending = PendingOps::default();
+    let mut last_rx = tokio::time::Instant::now();
 
     loop {
+        let watchdog_deadline = last_rx.checked_add(RX_WATCHDOG).unwrap_or(last_rx);
+        let watchdog = tokio::time::sleep_until(watchdog_deadline);
         let step = tokio::select! {
             cmd = rx.recv() => match cmd {
                 Some(c) => handle_command(c, my_node, sink, tx, &mut pending).await,
                 None => LoopStep::Channel,
             },
-            _ = heartbeat.tick() => match send_heartbeat(sink).await {
-                Ok(()) => LoopStep::Continue,
-                Err(e) => LoopStep::Error(e.to_string()),
+            _ = heartbeat.tick() => heartbeat_step(sink, my_node).await,
+            item = stream.next() => {
+                last_rx = tokio::time::Instant::now();
+                handle_incoming(item, my_node, tx, &mut pending).await
             },
-            item = stream.next() => handle_incoming(item, my_node, tx, &mut pending).await,
+            () = watchdog => LoopStep::Error(format!(
+                "no data from device in {}s — connection appears stale",
+                RX_WATCHDOG.as_secs(),
+            )),
         };
         match step {
             LoopStep::Continue => {}
@@ -345,6 +363,38 @@ async fn run_ready_loop(
             }
         }
     }
+}
+
+async fn heartbeat_step(
+    sink: SinkRef<'_, impl FrameSink + ?Sized>,
+    my_node: NodeId,
+) -> LoopStep {
+    let work = async move {
+        send_heartbeat(&mut *sink).await?;
+        send_metadata_probe(&mut *sink, my_node).await?;
+        Ok::<(), ConnectError>(())
+    };
+    match tokio::time::timeout(HEARTBEAT_SEND_TIMEOUT, work).await {
+        Ok(Ok(())) => LoopStep::Continue,
+        Ok(Err(e)) => LoopStep::Error(e.to_string()),
+        Err(_) => LoopStep::Error(format!(
+            "heartbeat blocked >{}s — transport stuck",
+            HEARTBEAT_SEND_TIMEOUT.as_secs(),
+        )),
+    }
+}
+
+async fn send_metadata_probe(
+    sink: SinkRef<'_, impl FrameSink + ?Sized>,
+    my_node: NodeId,
+) -> Result<(), ConnectError> {
+    let admin = meshtastic::AdminMessage {
+        payload_variant: Some(meshtastic::admin_message::PayloadVariant::GetDeviceMetadataRequest(
+            true,
+        )),
+        ..Default::default()
+    };
+    send_admin(sink, my_node, admin).await
 }
 
 enum LoopStep {
