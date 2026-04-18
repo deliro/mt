@@ -1,6 +1,7 @@
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::domain::channel::{Channel, ChannelRole};
+use crate::domain::config::LoraSettings;
 use crate::domain::ids::{ChannelIndex, ConfigId, NodeId};
 use crate::domain::node::{Node, NodeRole, Position};
 use crate::domain::session::HandshakeFragment;
@@ -16,11 +17,11 @@ pub fn fragments_from_radio(msg: meshtastic::FromRadio) -> Vec<HandshakeFragment
         PayloadVariant::NodeInfo(ni) => vec![HandshakeFragment::Node(node_from_proto(&ni))],
         PayloadVariant::Channel(ch) => channel_fragments(ch),
         PayloadVariant::Metadata(meta) => vec![HandshakeFragment::Firmware(meta.firmware_version)],
+        PayloadVariant::Config(cfg) => config_fragments(cfg),
         PayloadVariant::ConfigCompleteId(id) => {
             vec![HandshakeFragment::ConfigComplete { id: ConfigId(id) }]
         }
         PayloadVariant::Packet(_)
-        | PayloadVariant::Config(_)
         | PayloadVariant::ModuleConfig(_)
         | PayloadVariant::Rebooted(_)
         | PayloadVariant::QueueStatus(_)
@@ -94,4 +95,32 @@ fn channel_fragments(ch: meshtastic::Channel) -> Vec<HandshakeFragment> {
         None => (String::new(), false),
     };
     vec![HandshakeFragment::Channel(Channel { index, role, name, has_psk })]
+}
+
+fn config_fragments(cfg: meshtastic::Config) -> Vec<HandshakeFragment> {
+    use meshtastic::config::PayloadVariant;
+    let Some(variant) = cfg.payload_variant else { return Vec::new() };
+    match variant {
+        PayloadVariant::Lora(lora) => vec![HandshakeFragment::Lora(lora_from_proto(&lora))],
+        PayloadVariant::Device(_)
+        | PayloadVariant::Position(_)
+        | PayloadVariant::Power(_)
+        | PayloadVariant::Network(_)
+        | PayloadVariant::Display(_)
+        | PayloadVariant::Bluetooth(_)
+        | PayloadVariant::Security(_)
+        | PayloadVariant::Sessionkey(_)
+        | PayloadVariant::DeviceUi(_) => Vec::new(),
+    }
+}
+
+fn lora_from_proto(lora: &meshtastic::config::LoRaConfig) -> LoraSettings {
+    LoraSettings {
+        region: lora.region(),
+        modem_preset: lora.modem_preset(),
+        use_preset: lora.use_preset,
+        hop_limit: lora.hop_limit.min(7) as u8,
+        tx_enabled: lora.tx_enabled,
+        tx_power: lora.tx_power,
+    }
 }

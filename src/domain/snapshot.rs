@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use crate::domain::channel::Channel;
+use crate::domain::config::LoraSettings;
 use crate::domain::ids::NodeId;
 use crate::domain::message::TextMessage;
 use crate::domain::node::Node;
@@ -14,6 +15,7 @@ pub struct DeviceSnapshot {
     pub nodes: HashMap<NodeId, Node>,
     pub channels: Vec<Channel>,
     pub messages: Vec<TextMessage>,
+    pub lora: Option<LoraSettings>,
 }
 
 impl DeviceSnapshot {

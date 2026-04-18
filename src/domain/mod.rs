@@ -1,4 +1,5 @@
 pub mod channel;
+pub mod config;
 pub mod ids;
 pub mod message;
 pub mod node;

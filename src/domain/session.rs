@@ -27,6 +27,7 @@ pub struct HandshakeAcc {
     pub firmware: String,
     pub nodes: HashMap<NodeId, Node>,
     pub channels: Vec<Channel>,
+    pub lora: Option<crate::domain::config::LoraSettings>,
 }
 
 pub fn start_handshake(transport: TransportKind, config_id: ConfigId) -> SessionState {
@@ -39,6 +40,7 @@ pub fn start_handshake(transport: TransportKind, config_id: ConfigId) -> Session
         firmware: String::new(),
         nodes: HashMap::new(),
         channels: Vec::new(),
+        lora: None,
     })
 }
 
@@ -48,6 +50,7 @@ pub enum HandshakeFragment {
     Firmware(String),
     Node(Node),
     Channel(Channel),
+    Lora(crate::domain::config::LoraSettings),
     ConfigComplete { id: ConfigId },
     Message(TextMessage),
     MessageStateChanged { id: PacketId, state: DeliveryState },
@@ -92,6 +95,10 @@ fn apply_handshake(mut acc: HandshakeAcc, event: HandshakeFragment) -> SessionSt
             upsert_channel(&mut acc.channels, channel);
             SessionState::Handshake(acc)
         }
+        HandshakeFragment::Lora(settings) => {
+            acc.lora = Some(settings);
+            SessionState::Handshake(acc)
+        }
         HandshakeFragment::ConfigComplete { id } => {
             if id != acc.config_id {
                 return SessionState::Handshake(acc);
@@ -113,6 +120,7 @@ fn apply_handshake(mut acc: HandshakeAcc, event: HandshakeFragment) -> SessionSt
                 nodes: acc.nodes,
                 channels: acc.channels,
                 messages: Vec::new(),
+                lora: acc.lora,
             })
         }
         HandshakeFragment::Message(_)
@@ -126,6 +134,10 @@ fn apply_ready(mut snap: DeviceSnapshot, event: HandshakeFragment) -> SessionSta
         HandshakeFragment::MyNode { .. }
         | HandshakeFragment::Firmware(_)
         | HandshakeFragment::ConfigComplete { .. } => SessionState::Ready(snap),
+        HandshakeFragment::Lora(settings) => {
+            snap.lora = Some(settings);
+            SessionState::Ready(snap)
+        }
         HandshakeFragment::Node(node) => {
             snap.nodes.insert(node.id, node);
             SessionState::Ready(snap)

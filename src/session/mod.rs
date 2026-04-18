@@ -66,7 +66,11 @@ impl DeviceSession {
                 Command::Connect(profile) => {
                     run_connection(&self.connect, profile, &mut rx, &tx).await;
                 }
-                Command::Disconnect | Command::SendText { .. } | Command::AckTimeout(_) => {}
+                Command::Disconnect
+                | Command::SendText { .. }
+                | Command::AckTimeout(_)
+                | Command::SetOwner { .. }
+                | Command::SetLora(_) => {}
             }
         }
     }
@@ -114,7 +118,12 @@ async fn open_with_cancel(
                     return None;
                 }
                 Some(Command::Connect(_)) => warn!("ignoring Connect while already connecting"),
-                Some(Command::SendText { .. } | Command::AckTimeout(_)) => {
+                Some(
+                    Command::SendText { .. }
+                    | Command::AckTimeout(_)
+                    | Command::SetOwner { .. }
+                    | Command::SetLora(_),
+                ) => {
                     debug!("ignoring command while connecting");
                 }
             },
@@ -188,6 +197,7 @@ struct InitAcc {
     firmware: String,
     nodes: std::collections::HashMap<NodeId, Node>,
     channels: Vec<Channel>,
+    lora: Option<crate::domain::config::LoraSettings>,
 }
 
 impl InitAcc {
@@ -202,6 +212,7 @@ impl InitAcc {
                 Some(slot) => *slot = ch,
                 None => self.channels.push(ch),
             },
+            HandshakeFragment::Lora(settings) => self.lora = Some(settings),
             HandshakeFragment::ConfigComplete { .. }
             | HandshakeFragment::Message(_)
             | HandshakeFragment::MessageStateChanged { .. }
@@ -223,6 +234,7 @@ impl InitAcc {
             nodes: self.nodes,
             channels: self.channels,
             messages: Vec::new(),
+            lora: self.lora,
         }
     }
 }
@@ -321,7 +333,92 @@ async fn handle_command(
             }
             LoopStep::Continue
         }
+        Command::SetOwner { long_name, short_name } => {
+            match send_set_owner(sink, my_node, &long_name, &short_name).await {
+                Ok(()) => LoopStep::Continue,
+                Err(e) => LoopStep::Error(e.to_string()),
+            }
+        }
+        Command::SetLora(settings) => match send_set_lora(sink, my_node, &settings).await {
+            Ok(()) => LoopStep::Continue,
+            Err(e) => LoopStep::Error(e.to_string()),
+        },
     }
+}
+
+async fn send_set_owner(
+    sink: &mut Pin<Box<impl futures::Sink<Vec<u8>, Error = crate::transport::TransportError> + ?Sized>>,
+    my_node: NodeId,
+    long_name: &str,
+    short_name: &str,
+) -> Result<(), ConnectError> {
+    let admin = meshtastic::AdminMessage {
+        payload_variant: Some(meshtastic::admin_message::PayloadVariant::SetOwner(
+            meshtastic::User {
+                id: format!("!{:08x}", my_node.0),
+                long_name: long_name.into(),
+                short_name: short_name.into(),
+                ..Default::default()
+            },
+        )),
+        ..Default::default()
+    };
+    send_admin(sink, my_node, admin).await
+}
+
+async fn send_set_lora(
+    sink: &mut Pin<Box<impl futures::Sink<Vec<u8>, Error = crate::transport::TransportError> + ?Sized>>,
+    my_node: NodeId,
+    settings: &crate::domain::config::LoraSettings,
+) -> Result<(), ConnectError> {
+    let lora = meshtastic::config::LoRaConfig {
+        use_preset: settings.use_preset,
+        modem_preset: settings.modem_preset as i32,
+        region: settings.region as i32,
+        hop_limit: u32::from(settings.hop_limit.min(7)),
+        tx_enabled: settings.tx_enabled,
+        tx_power: settings.tx_power,
+        ..Default::default()
+    };
+    let cfg = meshtastic::Config {
+        payload_variant: Some(meshtastic::config::PayloadVariant::Lora(lora)),
+    };
+    let admin = meshtastic::AdminMessage {
+        payload_variant: Some(meshtastic::admin_message::PayloadVariant::SetConfig(cfg)),
+        ..Default::default()
+    };
+    send_admin(sink, my_node, admin).await
+}
+
+async fn send_admin(
+    sink: &mut Pin<Box<impl futures::Sink<Vec<u8>, Error = crate::transport::TransportError> + ?Sized>>,
+    my_node: NodeId,
+    admin: meshtastic::AdminMessage,
+) -> Result<(), ConnectError> {
+    let mut payload = Vec::with_capacity(admin.encoded_len());
+    admin.encode(&mut payload)?;
+    let data = meshtastic::Data {
+        portnum: meshtastic::PortNum::AdminApp as i32,
+        payload,
+        want_response: true,
+        ..Default::default()
+    };
+    let packet = meshtastic::MeshPacket {
+        from: my_node.0,
+        to: my_node.0,
+        channel: 0,
+        id: PacketId::random().0,
+        want_ack: true,
+        payload_variant: Some(meshtastic::mesh_packet::PayloadVariant::Decoded(data)),
+        ..Default::default()
+    };
+    let msg = meshtastic::ToRadio {
+        payload_variant: Some(meshtastic::to_radio::PayloadVariant::Packet(packet)),
+    };
+    let mut buf = Vec::with_capacity(msg.encoded_len());
+    msg.encode(&mut buf)?;
+    sink.send(buf).await?;
+    Ok(())
 }
 
 async fn handle_incoming(

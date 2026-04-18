@@ -2,6 +2,7 @@ pub mod chat;
 pub mod connect;
 pub mod nodes;
 pub mod scan;
+pub mod settings;
 pub mod status;
 
 use std::path::PathBuf;
@@ -33,6 +34,7 @@ pub struct AppState {
     pub scan_ui: scan::ScanUi,
     pub chat_ui: chat::ChatUi,
     pub nodes_ui: nodes::NodesUi,
+    pub settings_ui: settings::SettingsUi,
 }
 
 impl AppState {
@@ -46,6 +48,7 @@ pub enum Tab {
     #[default]
     Chat,
     Nodes,
+    Settings,
 }
 
 pub struct App {
@@ -139,6 +142,7 @@ impl eframe::App for App {
             ui.separator();
             ui.selectable_value(&mut self.state.active_tab, Tab::Chat, "Chat");
             ui.selectable_value(&mut self.state.active_tab, Tab::Nodes, "Nodes");
+            ui.selectable_value(&mut self.state.active_tab, Tab::Settings, "Settings");
         });
         match self.state.active_tab {
             Tab::Chat => {
@@ -150,6 +154,12 @@ impl eframe::App for App {
                 egui::CentralPanel::default().show(ctx, |ui| {
                     let AppState { snapshot, nodes_ui, .. } = &mut self.state;
                     nodes::render(ui, snapshot, nodes_ui);
+                });
+            }
+            Tab::Settings => {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    let AppState { snapshot, settings_ui, .. } = &mut self.state;
+                    settings::render(ui, snapshot, settings_ui, &self.cmd_tx);
                 });
             }
         }
