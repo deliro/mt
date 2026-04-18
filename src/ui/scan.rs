@@ -8,7 +8,7 @@ use tokio::sync::mpsc;
 use crate::domain::ids::BleAddress;
 use crate::domain::profile::ConnectionProfile;
 use crate::session::commands::Command;
-use crate::transport::ble::{Discovered, scan};
+use crate::transport::ble::{Discovered, scan_stream};
 
 #[derive(Default)]
 pub struct ScanUi {
@@ -40,13 +40,27 @@ pub fn open(ui: &mut ScanUi) {
     ui.open = true;
     ui.results.lock().clear();
     *ui.scanning.lock() = true;
+
     let results = ui.results.clone();
     let scanning = ui.scanning.clone();
+    let (tx, mut rx) = mpsc::unbounded_channel::<Discovered>();
+
     tokio::spawn(async move {
-        let outcome = scan(Duration::from_secs(3)).await;
-        let rows: Vec<DiscoveredRow> = outcome.unwrap_or_default().into_iter().map(Into::into).collect();
-        *results.lock() = rows;
+        while let Some(d) = rx.recv().await {
+            let mut rows = results.lock();
+            let address = d.address.clone();
+            let row: DiscoveredRow = d.into();
+            if let Some(slot) = rows.iter_mut().find(|r| r.address == address) {
+                *slot = row;
+            } else {
+                rows.push(row);
+            }
+        }
         *scanning.lock() = false;
+    });
+
+    tokio::spawn(async move {
+        let _ = scan_stream(Duration::from_secs(15), tx).await;
     });
 }
 
@@ -70,7 +84,8 @@ pub fn render(
             if scanning {
                 ui.spinner();
                 ui.label("Scanning…");
-            } else if ui.button("Rescan").clicked() {
+            }
+            if ui.add_enabled(!scanning, egui::Button::new("Rescan")).clicked() {
                 rescan = true;
             }
         });
@@ -78,7 +93,9 @@ pub fn render(
 
         let rows = ui_state.results.lock().clone();
         if rows.is_empty() && !scanning {
-            ui.weak("No Meshtastic devices found yet.");
+            ui.weak("No Meshtastic devices found.");
+        } else if rows.is_empty() {
+            ui.weak("Looking for devices…");
         }
         for row in rows {
             ui.horizontal(|ui| {

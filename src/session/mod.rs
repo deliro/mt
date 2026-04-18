@@ -11,21 +11,23 @@ use tokio::sync::mpsc;
 use tokio::time::{MissedTickBehavior, interval, sleep};
 use tracing::{debug, warn};
 
-use crate::domain::channel::{Channel, ChannelRole};
-use crate::domain::ids::{BROADCAST_NODE, ChannelIndex, ConfigId, NodeId, PacketId};
+use crate::domain::channel::Channel;
+use crate::domain::ids::{BROADCAST_NODE, ChannelIndex, NodeId, PacketId};
 use crate::domain::message::{DeliveryState, Direction, Recipient, TextMessage};
-use crate::domain::node::{Node, NodeRole, Position};
+use crate::domain::node::Node;
 use crate::domain::profile::{ConnectionProfile, TransportKind};
+use crate::domain::session::HandshakeFragment;
 use crate::domain::snapshot::DeviceSnapshot;
 use crate::error::ConnectError;
 use crate::proto::meshtastic;
 use crate::proto::port::{PortPayload, parse};
 use crate::session::commands::Command;
-use crate::session::handshake::run_handshake;
+use crate::session::handshake::{fragments_from_radio, node_from_proto};
 use crate::transport::BoxedTransport;
 
 pub const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(300);
 pub const ACK_TIMEOUT: Duration = Duration::from_secs(30);
+pub const MY_INFO_TIMEOUT: Duration = Duration::from_secs(15);
 
 #[derive(Clone, Debug)]
 pub enum Event {
@@ -70,13 +72,6 @@ impl DeviceSession {
     }
 }
 
-enum LoopStep {
-    Continue,
-    Disconnect,
-    Error(String),
-    Channel,
-}
-
 async fn run_connection(
     connect: &Connector,
     profile: ConnectionProfile,
@@ -84,68 +79,162 @@ async fn run_connection(
     tx: &mpsc::Sender<Event>,
 ) {
     let _ = tx.send(Event::Connecting).await;
-    let outcome = connect_with_cancel(connect, profile, rx).await;
-    match outcome {
-        ConnectOutcome::Ready(snap, transport) => {
-            let my_node = snap.my_node;
-            let _ = tx.send(Event::Connected(Box::new(snap))).await;
-            run_ready_loop(transport, my_node, rx, tx).await;
-        }
-        ConnectOutcome::Failed(msg) => {
-            let _ = tx.send(Event::Error(msg)).await;
-            let _ = tx.send(Event::Disconnected).await;
-        }
-        ConnectOutcome::Cancelled => {
-            let _ = tx.send(Event::Disconnected).await;
-        }
+    let Some((transport, _kind)) = open_with_cancel(connect, profile, rx, tx).await else {
+        return;
+    };
+    let (sink, stream) = transport.split();
+    let mut sink: Pin<Box<_>> = Box::pin(sink);
+    let mut stream: Pin<Box<_>> = Box::pin(stream);
+
+    if let Err(e) = send_want_config_id(&mut sink).await {
+        emit_error_and_disconnect(tx, &e.to_string()).await;
+        return;
     }
+
+    let Some(my_node) = wait_for_my_info(&mut stream, rx, tx).await else {
+        return;
+    };
+
+    run_ready_loop(&mut sink, &mut stream, my_node, rx, tx).await;
 }
 
-enum ConnectOutcome {
-    Ready(DeviceSnapshot, BoxedTransport),
-    Failed(String),
-    Cancelled,
-}
-
-async fn connect_with_cancel(
+async fn open_with_cancel(
     connect: &Connector,
     profile: ConnectionProfile,
     rx: &mut mpsc::UnboundedReceiver<Command>,
-) -> ConnectOutcome {
-    let work = async {
-        let (transport, kind) = (connect)(profile).await?;
-        let (snapshot, transport) = run_handshake(transport, kind, ConfigId::random()).await?;
-        Ok::<(DeviceSnapshot, BoxedTransport), ConnectError>((snapshot, transport))
-    };
-    let mut work = Box::pin(work);
+    tx: &mpsc::Sender<Event>,
+) -> Option<(BoxedTransport, TransportKind)> {
+    let mut work = Box::pin((connect)(profile));
     loop {
         tokio::select! {
             biased;
             cmd = rx.recv() => match cmd {
-                Some(Command::Disconnect) | None => return ConnectOutcome::Cancelled,
+                Some(Command::Disconnect) | None => {
+                    let _ = tx.send(Event::Disconnected).await;
+                    return None;
+                }
                 Some(Command::Connect(_)) => warn!("ignoring Connect while already connecting"),
                 Some(Command::SendText { .. } | Command::AckTimeout(_)) => {
                     debug!("ignoring command while connecting");
                 }
             },
             result = &mut work => return match result {
-                Ok((snap, transport)) => ConnectOutcome::Ready(snap, transport),
-                Err(e) => ConnectOutcome::Failed(e.to_string()),
+                Ok(pair) => Some(pair),
+                Err(e) => {
+                    emit_error_and_disconnect(tx, &e.to_string()).await;
+                    None
+                }
             },
         }
     }
 }
 
+async fn wait_for_my_info(
+    stream: &mut (impl futures::Stream<Item = Result<Vec<u8>, crate::transport::TransportError>>
+              + Unpin),
+    rx: &mut mpsc::UnboundedReceiver<Command>,
+    tx: &mpsc::Sender<Event>,
+) -> Option<NodeId> {
+    let mut acc = InitAcc::default();
+    let deadline = tokio::time::Instant::now()
+        .checked_add(MY_INFO_TIMEOUT)
+        .unwrap_or_else(tokio::time::Instant::now);
+
+    loop {
+        tokio::select! {
+            biased;
+            cmd = rx.recv() => match cmd {
+                Some(Command::Disconnect) | None => {
+                    let _ = tx.send(Event::Disconnected).await;
+                    return None;
+                }
+                Some(_) => {}
+            },
+            () = tokio::time::sleep_until(deadline) => {
+                emit_error_and_disconnect(tx, "timeout waiting for device").await;
+                return None;
+            }
+            item = stream.next() => {
+                let Some(item) = item else {
+                    emit_error_and_disconnect(tx, "transport closed").await;
+                    return None;
+                };
+                let frame = match item {
+                    Ok(f) => f,
+                    Err(e) => {
+                        emit_error_and_disconnect(tx, &e.to_string()).await;
+                        return None;
+                    }
+                };
+                let Ok(msg) = meshtastic::FromRadio::decode(frame.as_slice()) else {
+                    continue;
+                };
+                for fragment in fragments_from_radio(msg) {
+                    acc.apply(fragment);
+                }
+                if let Some(my_node) = acc.my_node {
+                    let snap = acc.into_snapshot(my_node);
+                    let _ = tx.send(Event::Connected(Box::new(snap))).await;
+                    return Some(my_node);
+                }
+            }
+        }
+    }
+}
+
+#[derive(Default)]
+struct InitAcc {
+    my_node: Option<NodeId>,
+    firmware: String,
+    nodes: std::collections::HashMap<NodeId, Node>,
+    channels: Vec<Channel>,
+}
+
+impl InitAcc {
+    fn apply(&mut self, fragment: HandshakeFragment) {
+        match fragment {
+            HandshakeFragment::MyNode { id } => self.my_node = Some(id),
+            HandshakeFragment::Firmware(v) => self.firmware = v,
+            HandshakeFragment::Node(node) => {
+                let _ = self.nodes.insert(node.id, node);
+            }
+            HandshakeFragment::Channel(ch) => match self.channels.iter_mut().find(|c| c.index == ch.index) {
+                Some(slot) => *slot = ch,
+                None => self.channels.push(ch),
+            },
+            HandshakeFragment::ConfigComplete { .. }
+            | HandshakeFragment::Message(_)
+            | HandshakeFragment::MessageStateChanged { .. }
+            | HandshakeFragment::NodeMetric { .. } => {}
+        }
+    }
+
+    fn into_snapshot(self, my_node: NodeId) -> DeviceSnapshot {
+        let (short, long) = self
+            .nodes
+            .get(&my_node)
+            .map(|n| (n.short_name.clone(), n.long_name.clone()))
+            .unwrap_or_default();
+        DeviceSnapshot {
+            my_node,
+            short_name: short,
+            long_name: long,
+            firmware_version: self.firmware,
+            nodes: self.nodes,
+            channels: self.channels,
+            messages: Vec::new(),
+        }
+    }
+}
+
 async fn run_ready_loop(
-    transport: BoxedTransport,
+    sink: &mut Pin<Box<impl futures::Sink<Vec<u8>, Error = crate::transport::TransportError> + ?Sized>>,
+    stream: &mut (impl futures::Stream<Item = Result<Vec<u8>, crate::transport::TransportError>>
+              + Unpin),
     my_node: NodeId,
     rx: &mut mpsc::UnboundedReceiver<Command>,
     tx: &mpsc::Sender<Event>,
 ) {
-    let (sink, stream) = transport.split();
-    let mut sink: Pin<Box<_>> = Box::pin(sink);
-    let mut stream: Pin<Box<_>> = Box::pin(stream);
-
     let mut heartbeat = interval(HEARTBEAT_INTERVAL);
     heartbeat.set_missed_tick_behavior(MissedTickBehavior::Delay);
     let _ = heartbeat.tick().await;
@@ -153,10 +242,10 @@ async fn run_ready_loop(
     loop {
         let step = tokio::select! {
             cmd = rx.recv() => match cmd {
-                Some(c) => handle_command(c, my_node, &mut sink, tx).await,
+                Some(c) => handle_command(c, my_node, sink, tx).await,
                 None => LoopStep::Channel,
             },
-            _ = heartbeat.tick() => match send_heartbeat(&mut sink).await {
+            _ = heartbeat.tick() => match send_heartbeat(sink).await {
                 Ok(()) => LoopStep::Continue,
                 Err(e) => LoopStep::Error(e.to_string()),
             },
@@ -164,18 +253,24 @@ async fn run_ready_loop(
         };
         match step {
             LoopStep::Continue => {}
-            LoopStep::Channel => break,
+            LoopStep::Channel => return,
             LoopStep::Disconnect => {
                 let _ = tx.send(Event::Disconnected).await;
                 return;
             }
             LoopStep::Error(msg) => {
-                let _ = tx.send(Event::Error(msg)).await;
-                let _ = tx.send(Event::Disconnected).await;
+                emit_error_and_disconnect(tx, &msg).await;
                 return;
             }
         }
     }
+}
+
+enum LoopStep {
+    Continue,
+    Disconnect,
+    Error(String),
+    Channel,
 }
 
 async fn handle_command(
@@ -245,6 +340,19 @@ async fn handle_incoming(
     LoopStep::Continue
 }
 
+async fn send_want_config_id(
+    sink: &mut Pin<Box<impl futures::Sink<Vec<u8>, Error = crate::transport::TransportError> + ?Sized>>,
+) -> Result<(), ConnectError> {
+    let id = crate::domain::ids::ConfigId::random().0;
+    let msg = meshtastic::ToRadio {
+        payload_variant: Some(meshtastic::to_radio::PayloadVariant::WantConfigId(id)),
+    };
+    let mut buf = Vec::with_capacity(msg.encoded_len());
+    msg.encode(&mut buf)?;
+    sink.send(buf).await?;
+    Ok(())
+}
+
 async fn send_text(
     sink: &mut Pin<Box<impl futures::Sink<Vec<u8>, Error = crate::transport::TransportError> + ?Sized>>,
     channel: ChannelIndex,
@@ -305,6 +413,11 @@ fn spawn_ack_timeout(tx: mpsc::Sender<Event>, id: PacketId) {
             })
             .await;
     });
+}
+
+async fn emit_error_and_disconnect(tx: &mpsc::Sender<Event>, msg: &str) {
+    let _ = tx.send(Event::Error(msg.into())).await;
+    let _ = tx.send(Event::Disconnected).await;
 }
 
 fn events_from_radio(msg: meshtastic::FromRadio) -> Vec<Event> {
@@ -374,27 +487,8 @@ fn packet_to_events(p: meshtastic::MeshPacket) -> Vec<Event> {
     }
 }
 
-fn node_from_proto(ni: &meshtastic::NodeInfo) -> Node {
-    Node {
-        id: NodeId(ni.num),
-        long_name: ni.user.as_ref().map(|u| u.long_name.clone()).unwrap_or_default(),
-        short_name: ni.user.as_ref().map(|u| u.short_name.clone()).unwrap_or_default(),
-        role: NodeRole::Client,
-        battery_level: ni.device_metrics.as_ref().map(|m| m.battery_level() as u8),
-        voltage_v: ni.device_metrics.as_ref().map(meshtastic::DeviceMetrics::voltage),
-        snr_db: Some(ni.snr),
-        rssi_dbm: None,
-        hops_away: Some(ni.hops_away() as u8),
-        last_heard: None,
-        position: ni.position.as_ref().map(|p| Position {
-            latitude_deg: p.latitude_i() as f64 * 1e-7,
-            longitude_deg: p.longitude_i() as f64 * 1e-7,
-            altitude_m: Some(p.altitude()),
-        }),
-    }
-}
-
 fn channel_to_events(ch: meshtastic::Channel) -> Vec<Event> {
+    use crate::domain::channel::ChannelRole;
     let Some(index) = ChannelIndex::new(ch.index as u8) else { return Vec::new() };
     let role = match ch.role() {
         meshtastic::channel::Role::Primary => ChannelRole::Primary,

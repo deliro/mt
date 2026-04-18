@@ -1,65 +1,10 @@
-use std::time::Duration;
-
-use futures::{SinkExt, StreamExt};
-use prost::Message;
-use tokio::time::timeout;
-
-use crate::domain::ids::{ConfigId, NodeId};
+use crate::domain::channel::{Channel, ChannelRole};
+use crate::domain::ids::{ChannelIndex, ConfigId, NodeId};
 use crate::domain::node::{Node, NodeRole, Position};
-use crate::domain::profile::TransportKind;
-use crate::domain::session::{HandshakeFragment, SessionState, apply, start_handshake};
-use crate::domain::snapshot::DeviceSnapshot;
-use crate::error::ConnectError;
+use crate::domain::session::HandshakeFragment;
 use crate::proto::meshtastic;
-use crate::transport::BoxedTransport;
 
-pub const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(60);
-
-pub async fn run_handshake(
-    mut transport: BoxedTransport,
-    transport_kind: TransportKind,
-    config_id: ConfigId,
-) -> Result<(DeviceSnapshot, BoxedTransport), ConnectError> {
-    let want = meshtastic::ToRadio {
-        payload_variant: Some(meshtastic::to_radio::PayloadVariant::WantConfigId(config_id.0)),
-    };
-    let mut buf = Vec::with_capacity(want.encoded_len());
-    want.encode(&mut buf)?;
-    transport.send(buf).await?;
-
-    let initial = start_handshake(transport_kind, config_id);
-
-    let drive = async move {
-        let mut state = initial;
-        while let Some(item) = transport.next().await {
-            let frame = item?;
-            let msg = meshtastic::FromRadio::decode(frame.as_slice())?;
-            for fragment in fragments_from_radio(msg) {
-                state = apply(state, fragment);
-                if matches!(state, SessionState::Ready(_)) {
-                    break;
-                }
-            }
-            if matches!(state, SessionState::Ready(_)) {
-                break;
-            }
-        }
-        Ok::<(SessionState, BoxedTransport), ConnectError>((state, transport))
-    };
-
-    let (state, transport) =
-        timeout(HANDSHAKE_TIMEOUT, drive).await.map_err(|_| ConnectError::HandshakeTimeout)??;
-
-    match state {
-        SessionState::Ready(snap) => Ok((snap, transport)),
-        SessionState::Disconnected
-        | SessionState::Connecting { .. }
-        | SessionState::Handshake(_)
-        | SessionState::Failed { .. } => Err(ConnectError::HandshakeTimeout),
-    }
-}
-
-fn fragments_from_radio(msg: meshtastic::FromRadio) -> Vec<HandshakeFragment> {
+pub fn fragments_from_radio(msg: meshtastic::FromRadio) -> Vec<HandshakeFragment> {
     use meshtastic::from_radio::PayloadVariant;
     let Some(variant) = msg.payload_variant else { return Vec::new() };
     match variant {
@@ -86,7 +31,7 @@ fn fragments_from_radio(msg: meshtastic::FromRadio) -> Vec<HandshakeFragment> {
     }
 }
 
-fn node_from_proto(ni: &meshtastic::NodeInfo) -> Node {
+pub fn node_from_proto(ni: &meshtastic::NodeInfo) -> Node {
     Node {
         id: NodeId(ni.num),
         long_name: ni.user.as_ref().map(|u| u.long_name.clone()).unwrap_or_default(),
@@ -107,8 +52,6 @@ fn node_from_proto(ni: &meshtastic::NodeInfo) -> Node {
 }
 
 fn channel_fragments(ch: meshtastic::Channel) -> Vec<HandshakeFragment> {
-    use crate::domain::channel::{Channel, ChannelRole};
-    use crate::domain::ids::ChannelIndex;
     let Some(index) = ChannelIndex::new(ch.index as u8) else {
         return Vec::new();
     };

@@ -86,6 +86,14 @@ impl App {
                 self.state.snapshot = *snap;
             }
             Event::NodeUpdated(node) => {
+                if node.id == self.state.snapshot.my_node {
+                    if !node.long_name.is_empty() {
+                        self.state.snapshot.long_name.clone_from(&node.long_name);
+                    }
+                    if !node.short_name.is_empty() {
+                        self.state.snapshot.short_name.clone_from(&node.short_name);
+                    }
+                }
                 let _ = self.state.snapshot.nodes.insert(node.id, node);
             }
             Event::ChannelUpdated(ch) => {

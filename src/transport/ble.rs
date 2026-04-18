@@ -4,9 +4,10 @@ use std::task::{Context, Poll};
 use std::time::Duration;
 
 use btleplug::api::{
-    Central, CharPropFlags, Characteristic, Manager as _, Peripheral as _, ScanFilter, WriteType,
+    Central, CentralEvent, CharPropFlags, Characteristic, Manager as _, Peripheral as _,
+    ScanFilter, WriteType,
 };
-use btleplug::platform::{Adapter, Manager, Peripheral as PlatformPeripheral};
+use btleplug::platform::{Adapter, Manager, Peripheral as PlatformPeripheral, PeripheralId};
 use futures::{Sink, Stream, StreamExt};
 use tokio::sync::mpsc;
 use tokio::time::sleep;
@@ -31,29 +32,83 @@ pub struct Discovered {
     pub is_paired: bool,
 }
 
-pub async fn scan(duration: Duration) -> Result<Vec<Discovered>, ConnectError> {
+pub async fn scan_stream(
+    duration: Duration,
+    sink: mpsc::UnboundedSender<Discovered>,
+) -> Result<(), ConnectError> {
     let manager = Manager::new().await.map_err(|e| ConnectError::BleGatt(e.to_string()))?;
     let adapter = first_adapter(&manager).await?;
+    let mut events = adapter.events().await.map_err(|e| ConnectError::BleGatt(e.to_string()))?;
     adapter
         .start_scan(ScanFilter { services: vec![SERVICE_UUID] })
         .await
         .map_err(|e| ConnectError::BleGatt(e.to_string()))?;
-    sleep(duration).await;
-    let _ = adapter.stop_scan().await;
 
-    let peripherals =
-        adapter.peripherals().await.map_err(|e| ConnectError::BleGatt(e.to_string()))?;
-    let mut out = Vec::with_capacity(peripherals.len());
-    for p in peripherals {
-        let Ok(Some(props)) = p.properties().await else { continue };
-        let is_connected = p.is_connected().await.unwrap_or(false);
-        let addr = BleAddress::new(p.id().to_string());
-        let name = props.local_name.clone().unwrap_or_else(|| "Meshtastic".into());
-        debug!(%name, id = %addr.as_str(), connected = is_connected, "ble scan row");
-        out.push(Discovered { name, address: addr, rssi_dbm: props.rssi, is_paired: is_connected });
+    for p in adapter.peripherals().await.unwrap_or_default() {
+        emit_peripheral(&p, &sink).await;
     }
-    info!(count = out.len(), "ble scan finished");
-    Ok(out)
+
+    let deadline = tokio::time::Instant::now()
+        .checked_add(duration)
+        .unwrap_or_else(tokio::time::Instant::now);
+    let mut last_emitted: std::collections::HashSet<String> =
+        std::collections::HashSet::default();
+    loop {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if remaining.is_zero() {
+            break;
+        }
+        let event = tokio::select! {
+            () = tokio::time::sleep(remaining) => break,
+            e = events.next() => e,
+        };
+        let Some(event) = event else { break };
+        let id = match event {
+            CentralEvent::DeviceDiscovered(id) | CentralEvent::DeviceUpdated(id) => id,
+            CentralEvent::DeviceConnected(_)
+            | CentralEvent::DeviceDisconnected(_)
+            | CentralEvent::ManufacturerDataAdvertisement { .. }
+            | CentralEvent::ServiceDataAdvertisement { .. }
+            | CentralEvent::ServicesAdvertisement { .. }
+            | CentralEvent::StateUpdate(_) => continue,
+        };
+        if let Some(p) = find_by_id(&adapter, &id).await
+            && last_emitted.insert(p.id().to_string())
+        {
+            emit_peripheral(&p, &sink).await;
+        }
+    }
+    let _ = adapter.stop_scan().await;
+    Ok(())
+}
+
+async fn emit_peripheral(
+    p: &PlatformPeripheral,
+    sink: &mpsc::UnboundedSender<Discovered>,
+) {
+    let Ok(Some(props)) = p.properties().await else { return };
+    if !props.services.contains(&SERVICE_UUID) {
+        return;
+    }
+    let is_connected = p.is_connected().await.unwrap_or(false);
+    let address = BleAddress::new(p.id().to_string());
+    let name = props.local_name.clone().unwrap_or_else(|| "Meshtastic".into());
+    debug!(%name, id = %address.as_str(), connected = is_connected, "ble scan row");
+    let _ = sink.send(Discovered {
+        name,
+        address,
+        rssi_dbm: props.rssi,
+        is_paired: is_connected,
+    });
+}
+
+async fn find_by_id(adapter: &Adapter, id: &PeripheralId) -> Option<PlatformPeripheral> {
+    adapter
+        .peripherals()
+        .await
+        .ok()?
+        .into_iter()
+        .find(|p| &p.id() == id)
 }
 
 pub async fn connect(address: &BleAddress) -> Result<BoxedTransport, ConnectError> {
