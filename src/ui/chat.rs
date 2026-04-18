@@ -33,9 +33,13 @@ fn search_bar(ui: &mut egui::Ui, state: &mut AppState) {
         ui.label("Search:");
         let resp = ui.add(
             egui::TextEdit::singleline(&mut state.chat_ui.search)
-                .hint_text("text or sender")
+                .hint_text("text or sender (⌘K)")
                 .desired_width(220.0),
         );
+        if state.focus_search {
+            resp.request_focus();
+            state.focus_search = false;
+        }
         if resp.changed() {
             // Force the scroll area to jump back to the bottom of the newly
             // filtered list so search hits are visible without hunting.

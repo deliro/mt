@@ -58,6 +58,10 @@ pub struct AppState {
     /// Set to `true` by any mutation of `profiles` — the app loop picks it
     /// up and persists the list through the `HistoryStore`.
     pub profiles_dirty: bool,
+    /// One-shot request from a keyboard shortcut to focus the search box
+    /// on the currently active tab. Consumed the same frame by the
+    /// corresponding tab's renderer.
+    pub focus_search: bool,
 }
 
 #[derive(Default)]
@@ -181,6 +185,27 @@ impl App {
         self.state.snapshot = snapshot;
         self.state.reconnect.on_connected();
         self.persist_last_active();
+    }
+
+    /// Global keyboard shortcuts handled before the frame's UI draws.
+    fn handle_shortcuts(&mut self, ctx: &egui::Context) {
+        let focus = egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::K);
+        if ctx.input_mut(|i| i.consume_shortcut(&focus)) {
+            self.state.focus_search = true;
+        }
+        if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+            // Close the detail popup first (modal-ish), then fall through to
+            // search clearing on the active tab the next Esc.
+            if self.state.detail_node.is_some() {
+                self.state.detail_node = None;
+            } else {
+                match self.state.active_tab {
+                    Tab::Chat => self.state.chat_ui.search.clear(),
+                    Tab::Nodes => self.state.nodes_ui.search.clear(),
+                    Tab::Channels | Tab::Settings => {}
+                }
+            }
+        }
     }
 
     fn persist_last_active(&mut self) {
@@ -374,31 +399,63 @@ const fn is_activity(ev: &Event) -> bool {
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.drain_events();
-        if self.state.profiles_dirty {
-            if let Some(store) = self.store.as_ref()
-                && let Err(e) = store.save_profiles(&self.state.profiles)
-            {
-                warn!(%e, "persist profiles failed");
-            }
-            self.state.profiles_dirty = false;
+        self.handle_shortcuts(ctx);
+        self.flush_profiles_dirty();
+        self.render_reconnect(ctx);
+        self.render_chrome(ctx);
+        if !self.state.connected() {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                connect::render(ui, &mut self.state, &self.cmd_tx);
+            });
+            ctx.request_repaint_after(std::time::Duration::from_millis(100));
+            return;
         }
+        self.render_sidebar(ctx);
+        self.render_active_tab(ctx);
+        details::render_overlay(ctx, &mut self.state, &self.cmd_tx);
+        remote_admin::render(
+            ctx,
+            &self.state.snapshot,
+            &mut self.state.remote_admin,
+            &self.cmd_tx,
+        );
+        ctx.request_repaint_after(std::time::Duration::from_millis(100));
+    }
+}
+
+impl App {
+    fn flush_profiles_dirty(&mut self) {
+        if !self.state.profiles_dirty {
+            return;
+        }
+        if let Some(store) = self.store.as_ref()
+            && let Err(e) = store.save_profiles(&self.state.profiles)
+        {
+            warn!(%e, "persist profiles failed");
+        }
+        self.state.profiles_dirty = false;
+    }
+
+    fn render_reconnect(&mut self, ctx: &egui::Context) {
         let now = Instant::now();
         let disconnected = matches!(self.state.status, SessionStatus::Disconnected);
         let connecting = matches!(self.state.status, SessionStatus::Connecting);
-        let mut stop_reconnect = false;
+        let mut stop = false;
         reconnect::render_banner(
             ctx,
             &self.state.reconnect,
             disconnected,
             connecting,
             now,
-            &mut stop_reconnect,
+            &mut stop,
         );
-        if stop_reconnect {
+        if stop {
             self.state.reconnect.cancel();
         }
         reconnect::tick(&mut self.state.reconnect, disconnected, now, &self.cmd_tx);
+    }
 
+    fn render_chrome(&mut self, ctx: &egui::Context) {
         egui::TopBottomPanel::top("status").show(ctx, |ui| status::render(ui, &self.state));
         if self.state.connected() {
             firmware::render_banner_if_old(ctx, &self.state.snapshot.firmware_version);
@@ -411,14 +468,9 @@ impl eframe::App for App {
             &mut self.state.profiles_dirty,
             &mut self.state.reconnect,
         );
+    }
 
-        if !self.state.connected() {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                connect::render(ui, &mut self.state, &self.cmd_tx);
-            });
-            ctx.request_repaint_after(std::time::Duration::from_millis(100));
-            return;
-        }
+    fn render_sidebar(&mut self, ctx: &egui::Context) {
         egui::SidePanel::left("sidebar").show(ctx, |ui| {
             if ui.button("Disconnect").clicked() {
                 self.state.reconnect.mark_user_disconnect();
@@ -430,6 +482,9 @@ impl eframe::App for App {
             ui.selectable_value(&mut self.state.active_tab, Tab::Channels, "Channels");
             ui.selectable_value(&mut self.state.active_tab, Tab::Settings, "Settings");
         });
+    }
+
+    fn render_active_tab(&mut self, ctx: &egui::Context) {
         match self.state.active_tab {
             Tab::Chat => {
                 egui::TopBottomPanel::bottom("chat_composer")
@@ -444,8 +499,14 @@ impl eframe::App for App {
             }
             Tab::Nodes => {
                 egui::CentralPanel::default().show(ctx, |ui| {
-                    let AppState { snapshot, nodes_ui, detail_node, .. } = &mut self.state;
-                    nodes::render(ui, snapshot, nodes_ui, detail_node);
+                    let AppState {
+                        snapshot,
+                        nodes_ui,
+                        detail_node,
+                        focus_search,
+                        ..
+                    } = &mut self.state;
+                    nodes::render(ui, snapshot, nodes_ui, detail_node, focus_search);
                 });
             }
             Tab::Channels => {
@@ -465,13 +526,5 @@ impl eframe::App for App {
                 }
             }
         }
-        details::render_overlay(ctx, &mut self.state, &self.cmd_tx);
-        remote_admin::render(
-            ctx,
-            &self.state.snapshot,
-            &mut self.state.remote_admin,
-            &self.cmd_tx,
-        );
-        ctx.request_repaint_after(std::time::Duration::from_millis(100));
     }
 }

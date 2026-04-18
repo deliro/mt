@@ -70,6 +70,7 @@ pub fn render(
     snapshot: &DeviceSnapshot,
     nodes_ui: &mut NodesUi,
     detail_node: &mut Option<NodeId>,
+    focus_search: &mut bool,
 ) {
     let now_system = SystemTime::now();
     let now_inst = Instant::now();
@@ -83,7 +84,7 @@ pub fn render(
         ui.ctx().request_repaint_after(Duration::from_millis(16));
     }
 
-    toolbar(ui, nodes_ui, nodes.len(), counts);
+    toolbar(ui, nodes_ui, nodes.len(), counts, focus_search);
     ui.separator();
     table(ui, &nodes, nodes_ui, detail_node, now_inst, now_system);
 }
@@ -137,7 +138,13 @@ impl NodeCounts {
     }
 }
 
-fn toolbar(ui: &mut egui::Ui, nodes_ui: &mut NodesUi, shown: usize, counts: NodeCounts) {
+fn toolbar(
+    ui: &mut egui::Ui,
+    nodes_ui: &mut NodesUi,
+    shown: usize,
+    counts: NodeCounts,
+    focus_search: &mut bool,
+) {
     ui.horizontal(|ui| {
         if shown == counts.total {
             ui.label(format!("{} nodes", counts.total));
@@ -168,9 +175,13 @@ fn toolbar(ui: &mut egui::Ui, nodes_ui: &mut NodesUi, shown: usize, counts: Node
         ui.label("Search:");
         let resp = ui.add(
             egui::TextEdit::singleline(&mut nodes_ui.search)
-                .hint_text("name or id")
+                .hint_text("name or id (⌘K)")
                 .desired_width(180.0),
         );
+        if *focus_search {
+            resp.request_focus();
+            *focus_search = false;
+        }
         if !nodes_ui.search.is_empty() && resp.has_focus() && ui.small_button("clear").clicked() {
             nodes_ui.search.clear();
         }
