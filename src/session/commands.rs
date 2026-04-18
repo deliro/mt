@@ -1,4 +1,7 @@
-use crate::domain::config::LoraSettings;
+use crate::domain::config::{
+    BluetoothSettings, DeviceSettings, DisplaySettings, LoraSettings, NetworkSettings,
+    PositionSettings, PowerSettings,
+};
 use crate::domain::ids::{ChannelIndex, PacketId};
 use crate::domain::message::Recipient;
 use crate::domain::profile::ConnectionProfile;
@@ -11,4 +14,10 @@ pub enum Command {
     AckTimeout(PacketId),
     SetOwner { long_name: String, short_name: String },
     SetLora(LoraSettings),
+    SetDevice(DeviceSettings),
+    SetPosition(PositionSettings),
+    SetPower(PowerSettings),
+    SetNetwork(NetworkSettings),
+    SetDisplay(DisplaySettings),
+    SetBluetooth(BluetoothSettings),
 }

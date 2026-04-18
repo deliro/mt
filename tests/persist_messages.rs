@@ -49,7 +49,7 @@ fn update_state_changes_outgoing() {
     store.update_state(my, PacketId(10), &DeliveryState::Acked).unwrap();
     let loaded = store.load(my).unwrap();
     assert_eq!(loaded.len(), 1);
-    assert_eq!(loaded[0].state, DeliveryState::Acked);
+    assert_eq!(loaded.first().map(|m| m.state.clone()), Some(DeliveryState::Acked));
 }
 
 #[test]
@@ -62,5 +62,8 @@ fn state_failed_preserves_reason() {
     msg.direction = Direction::Outgoing;
     store.upsert(my, &msg).unwrap();
     let loaded = store.load(my).unwrap();
-    assert_eq!(loaded[0].state, DeliveryState::Failed("no ack".into()));
+    assert_eq!(
+        loaded.first().map(|m| m.state.clone()),
+        Some(DeliveryState::Failed("no ack".into())),
+    );
 }

@@ -1,7 +1,10 @@
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::domain::channel::{Channel, ChannelRole};
-use crate::domain::config::LoraSettings;
+use crate::domain::config::{
+    BluetoothSettings, DeviceSettings, DisplaySettings, LoraSettings, NetworkSettings,
+    PositionSettings, PowerSettings,
+};
 use crate::domain::ids::{BROADCAST_NODE, ChannelIndex, ConfigId, NodeId, PacketId};
 use crate::domain::message::{DeliveryState, Direction, Recipient, TextMessage};
 use crate::domain::node::{Node, NodeRole, Position};
@@ -143,19 +146,21 @@ fn config_fragments(cfg: meshtastic::Config) -> Vec<HandshakeFragment> {
     let Some(variant) = cfg.payload_variant else { return Vec::new() };
     match variant {
         PayloadVariant::Lora(lora) => vec![HandshakeFragment::Lora(lora_from_proto(&lora))],
-        PayloadVariant::Device(_)
-        | PayloadVariant::Position(_)
-        | PayloadVariant::Power(_)
-        | PayloadVariant::Network(_)
-        | PayloadVariant::Display(_)
-        | PayloadVariant::Bluetooth(_)
-        | PayloadVariant::Security(_)
-        | PayloadVariant::Sessionkey(_)
-        | PayloadVariant::DeviceUi(_) => Vec::new(),
+        PayloadVariant::Device(d) => vec![HandshakeFragment::Device(device_from_proto(&d))],
+        PayloadVariant::Position(p) => vec![HandshakeFragment::Position(position_from_proto(&p))],
+        PayloadVariant::Power(p) => vec![HandshakeFragment::Power(power_from_proto(&p))],
+        PayloadVariant::Network(n) => vec![HandshakeFragment::Network(network_from_proto(&n))],
+        PayloadVariant::Display(d) => vec![HandshakeFragment::Display(display_from_proto(&d))],
+        PayloadVariant::Bluetooth(b) => {
+            vec![HandshakeFragment::Bluetooth(bluetooth_from_proto(&b))]
+        }
+        PayloadVariant::Security(_) | PayloadVariant::Sessionkey(_) | PayloadVariant::DeviceUi(_) => {
+            Vec::new()
+        }
     }
 }
 
-fn lora_from_proto(lora: &meshtastic::config::LoRaConfig) -> LoraSettings {
+pub fn lora_from_proto(lora: &meshtastic::config::LoRaConfig) -> LoraSettings {
     LoraSettings {
         region: lora.region(),
         modem_preset: lora.modem_preset(),
@@ -164,4 +169,64 @@ fn lora_from_proto(lora: &meshtastic::config::LoRaConfig) -> LoraSettings {
         tx_enabled: lora.tx_enabled,
         tx_power: lora.tx_power,
     }
+}
+
+pub fn device_from_proto(d: &meshtastic::config::DeviceConfig) -> DeviceSettings {
+    DeviceSettings {
+        role: d.role(),
+        rebroadcast_mode: d.rebroadcast_mode(),
+        node_info_broadcast_secs: d.node_info_broadcast_secs,
+        disable_triple_click: d.disable_triple_click,
+        led_heartbeat_disabled: d.led_heartbeat_disabled,
+        tzdef: d.tzdef.clone(),
+    }
+}
+
+pub fn position_from_proto(p: &meshtastic::config::PositionConfig) -> PositionSettings {
+    PositionSettings {
+        broadcast_secs: p.position_broadcast_secs,
+        smart_enabled: p.position_broadcast_smart_enabled,
+        fixed_position: p.fixed_position,
+        gps_update_interval: p.gps_update_interval,
+        gps_mode: p.gps_mode(),
+        smart_min_distance_m: p.broadcast_smart_minimum_distance,
+        smart_min_interval_secs: p.broadcast_smart_minimum_interval_secs,
+    }
+}
+
+pub fn power_from_proto(p: &meshtastic::config::PowerConfig) -> PowerSettings {
+    PowerSettings {
+        is_power_saving: p.is_power_saving,
+        on_battery_shutdown_after_secs: p.on_battery_shutdown_after_secs,
+        wait_bluetooth_secs: p.wait_bluetooth_secs,
+        ls_secs: p.ls_secs,
+        min_wake_secs: p.min_wake_secs,
+    }
+}
+
+pub fn network_from_proto(n: &meshtastic::config::NetworkConfig) -> NetworkSettings {
+    NetworkSettings {
+        wifi_enabled: n.wifi_enabled,
+        wifi_ssid: n.wifi_ssid.clone(),
+        wifi_psk: n.wifi_psk.clone(),
+        ntp_server: n.ntp_server.clone(),
+        eth_enabled: n.eth_enabled,
+    }
+}
+
+pub fn display_from_proto(d: &meshtastic::config::DisplayConfig) -> DisplaySettings {
+    use crate::domain::config::{ClockFormat, ScreenOrientation};
+    DisplaySettings {
+        screen_on_secs: d.screen_on_secs,
+        auto_carousel_secs: d.auto_screen_carousel_secs,
+        orientation: if d.flip_screen { ScreenOrientation::Flipped } else { ScreenOrientation::Normal },
+        units: d.units(),
+        clock: if d.use_12h_clock { ClockFormat::H12 } else { ClockFormat::H24 },
+        heading_bold: d.heading_bold,
+        wake_on_tap_or_motion: d.wake_on_tap_or_motion,
+    }
+}
+
+pub fn bluetooth_from_proto(b: &meshtastic::config::BluetoothConfig) -> BluetoothSettings {
+    BluetoothSettings { enabled: b.enabled, mode: b.mode(), fixed_pin: b.fixed_pin }
 }

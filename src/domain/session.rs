@@ -28,6 +28,12 @@ pub struct HandshakeAcc {
     pub nodes: HashMap<NodeId, Node>,
     pub channels: Vec<Channel>,
     pub lora: Option<crate::domain::config::LoraSettings>,
+    pub device: Option<crate::domain::config::DeviceSettings>,
+    pub position: Option<crate::domain::config::PositionSettings>,
+    pub power: Option<crate::domain::config::PowerSettings>,
+    pub network: Option<crate::domain::config::NetworkSettings>,
+    pub display: Option<crate::domain::config::DisplaySettings>,
+    pub bluetooth: Option<crate::domain::config::BluetoothSettings>,
 }
 
 pub fn start_handshake(transport: TransportKind, config_id: ConfigId) -> SessionState {
@@ -41,6 +47,12 @@ pub fn start_handshake(transport: TransportKind, config_id: ConfigId) -> Session
         nodes: HashMap::new(),
         channels: Vec::new(),
         lora: None,
+        device: None,
+        position: None,
+        power: None,
+        network: None,
+        display: None,
+        bluetooth: None,
     })
 }
 
@@ -51,6 +63,12 @@ pub enum HandshakeFragment {
     Node(Node),
     Channel(Channel),
     Lora(crate::domain::config::LoraSettings),
+    Device(crate::domain::config::DeviceSettings),
+    Position(crate::domain::config::PositionSettings),
+    Power(crate::domain::config::PowerSettings),
+    Network(crate::domain::config::NetworkSettings),
+    Display(crate::domain::config::DisplaySettings),
+    Bluetooth(crate::domain::config::BluetoothSettings),
     ConfigComplete { id: ConfigId },
     Message(TextMessage),
     MessageStateChanged { id: PacketId, state: DeliveryState },
@@ -99,6 +117,30 @@ fn apply_handshake(mut acc: HandshakeAcc, event: HandshakeFragment) -> SessionSt
             acc.lora = Some(settings);
             SessionState::Handshake(acc)
         }
+        HandshakeFragment::Device(settings) => {
+            acc.device = Some(settings);
+            SessionState::Handshake(acc)
+        }
+        HandshakeFragment::Position(settings) => {
+            acc.position = Some(settings);
+            SessionState::Handshake(acc)
+        }
+        HandshakeFragment::Power(settings) => {
+            acc.power = Some(settings);
+            SessionState::Handshake(acc)
+        }
+        HandshakeFragment::Network(settings) => {
+            acc.network = Some(settings);
+            SessionState::Handshake(acc)
+        }
+        HandshakeFragment::Display(settings) => {
+            acc.display = Some(settings);
+            SessionState::Handshake(acc)
+        }
+        HandshakeFragment::Bluetooth(settings) => {
+            acc.bluetooth = Some(settings);
+            SessionState::Handshake(acc)
+        }
         HandshakeFragment::ConfigComplete { id } => {
             if id != acc.config_id {
                 return SessionState::Handshake(acc);
@@ -121,6 +163,12 @@ fn apply_handshake(mut acc: HandshakeAcc, event: HandshakeFragment) -> SessionSt
                 channels: acc.channels,
                 messages: Vec::new(),
                 lora: acc.lora,
+                device: acc.device,
+                position: acc.position,
+                power: acc.power,
+                network: acc.network,
+                display: acc.display,
+                bluetooth: acc.bluetooth,
             })
         }
         HandshakeFragment::Message(_)
@@ -136,6 +184,30 @@ fn apply_ready(mut snap: DeviceSnapshot, event: HandshakeFragment) -> SessionSta
         | HandshakeFragment::ConfigComplete { .. } => SessionState::Ready(snap),
         HandshakeFragment::Lora(settings) => {
             snap.lora = Some(settings);
+            SessionState::Ready(snap)
+        }
+        HandshakeFragment::Device(settings) => {
+            snap.device = Some(settings);
+            SessionState::Ready(snap)
+        }
+        HandshakeFragment::Position(settings) => {
+            snap.position = Some(settings);
+            SessionState::Ready(snap)
+        }
+        HandshakeFragment::Power(settings) => {
+            snap.power = Some(settings);
+            SessionState::Ready(snap)
+        }
+        HandshakeFragment::Network(settings) => {
+            snap.network = Some(settings);
+            SessionState::Ready(snap)
+        }
+        HandshakeFragment::Display(settings) => {
+            snap.display = Some(settings);
+            SessionState::Ready(snap)
+        }
+        HandshakeFragment::Bluetooth(settings) => {
+            snap.bluetooth = Some(settings);
             SessionState::Ready(snap)
         }
         HandshakeFragment::Node(node) => {

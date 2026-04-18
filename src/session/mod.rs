@@ -36,6 +36,12 @@ pub enum Event {
     NodeUpdated(Node),
     ChannelUpdated(Channel),
     LoraUpdated(crate::domain::config::LoraSettings),
+    DeviceUpdated(crate::domain::config::DeviceSettings),
+    PositionUpdated(crate::domain::config::PositionSettings),
+    PowerUpdated(crate::domain::config::PowerSettings),
+    NetworkUpdated(crate::domain::config::NetworkSettings),
+    DisplayUpdated(crate::domain::config::DisplaySettings),
+    BluetoothUpdated(crate::domain::config::BluetoothSettings),
     MessageReceived(TextMessage),
     MessageStateChanged { id: PacketId, state: DeliveryState },
     Disconnected,
@@ -71,7 +77,13 @@ impl DeviceSession {
                 | Command::SendText { .. }
                 | Command::AckTimeout(_)
                 | Command::SetOwner { .. }
-                | Command::SetLora(_) => {}
+                | Command::SetLora(_)
+                | Command::SetDevice(_)
+                | Command::SetPosition(_)
+                | Command::SetPower(_)
+                | Command::SetNetwork(_)
+                | Command::SetDisplay(_)
+                | Command::SetBluetooth(_) => {}
             }
         }
     }
@@ -123,7 +135,13 @@ async fn open_with_cancel(
                     Command::SendText { .. }
                     | Command::AckTimeout(_)
                     | Command::SetOwner { .. }
-                    | Command::SetLora(_),
+                    | Command::SetLora(_)
+                    | Command::SetDevice(_)
+                    | Command::SetPosition(_)
+                    | Command::SetPower(_)
+                    | Command::SetNetwork(_)
+                    | Command::SetDisplay(_)
+                    | Command::SetBluetooth(_),
                 ) => {
                     debug!("ignoring command while connecting");
                 }
@@ -199,6 +217,12 @@ struct InitAcc {
     nodes: std::collections::HashMap<NodeId, Node>,
     channels: Vec<Channel>,
     lora: Option<crate::domain::config::LoraSettings>,
+    device: Option<crate::domain::config::DeviceSettings>,
+    position: Option<crate::domain::config::PositionSettings>,
+    power: Option<crate::domain::config::PowerSettings>,
+    network: Option<crate::domain::config::NetworkSettings>,
+    display: Option<crate::domain::config::DisplaySettings>,
+    bluetooth: Option<crate::domain::config::BluetoothSettings>,
     messages: Vec<TextMessage>,
 }
 
@@ -215,6 +239,12 @@ impl InitAcc {
                 None => self.channels.push(ch),
             },
             HandshakeFragment::Lora(settings) => self.lora = Some(settings),
+            HandshakeFragment::Device(settings) => self.device = Some(settings),
+            HandshakeFragment::Position(settings) => self.position = Some(settings),
+            HandshakeFragment::Power(settings) => self.power = Some(settings),
+            HandshakeFragment::Network(settings) => self.network = Some(settings),
+            HandshakeFragment::Display(settings) => self.display = Some(settings),
+            HandshakeFragment::Bluetooth(settings) => self.bluetooth = Some(settings),
             HandshakeFragment::Message(msg) => self.messages.push(msg),
             HandshakeFragment::ConfigComplete { .. }
             | HandshakeFragment::MessageStateChanged { .. }
@@ -237,6 +267,12 @@ impl InitAcc {
             channels: self.channels,
             messages: self.messages,
             lora: self.lora,
+            device: self.device,
+            position: self.position,
+            power: self.power,
+            network: self.network,
+            display: self.display,
+            bluetooth: self.bluetooth,
         }
     }
 }
@@ -303,30 +339,8 @@ async fn handle_command(
         }
         Command::Disconnect => LoopStep::Disconnect,
         Command::SendText { channel, to, text, want_ack } => {
-            let is_dm = matches!(to, Recipient::Node(_));
-            let on_wire_want_ack = want_ack && is_dm;
-            match send_text(sink, channel, to, &text, on_wire_want_ack).await {
-                Ok(id) => {
-                    let _ = pending.insert(id);
-                    let _ = tx
-                        .send(Event::MessageReceived(TextMessage {
-                            id,
-                            channel,
-                            from: my_node,
-                            to,
-                            text,
-                            received_at: SystemTime::now(),
-                            direction: Direction::Outgoing,
-                            state: DeliveryState::Queued,
-                        }))
-                        .await;
-                    if is_dm {
-                        spawn_ack_timeout(tx.clone(), id);
-                    }
-                    LoopStep::Continue
-                }
-                Err(e) => LoopStep::Error(e.to_string()),
-            }
+            let req = SendTextRequest { channel, to, text, want_ack };
+            handle_send_text(sink, my_node, tx, pending, req).await
         }
         Command::AckTimeout(id) => {
             if pending.remove(&id) {
@@ -339,16 +353,74 @@ async fn handle_command(
             }
             LoopStep::Continue
         }
-        Command::SetOwner { long_name, short_name } => {
-            match send_set_owner(sink, my_node, &long_name, &short_name).await {
-                Ok(()) => LoopStep::Continue,
-                Err(e) => LoopStep::Error(e.to_string()),
+        other => handle_config_command(other, my_node, sink).await,
+    }
+}
+
+struct SendTextRequest {
+    channel: ChannelIndex,
+    to: Recipient,
+    text: String,
+    want_ack: bool,
+}
+
+async fn handle_send_text(
+    sink: &mut Pin<Box<impl futures::Sink<Vec<u8>, Error = crate::transport::TransportError> + ?Sized>>,
+    my_node: NodeId,
+    tx: &mpsc::Sender<Event>,
+    pending: &mut std::collections::HashSet<PacketId>,
+    req: SendTextRequest,
+) -> LoopStep {
+    let is_dm = matches!(req.to, Recipient::Node(_));
+    let on_wire_want_ack = req.want_ack && is_dm;
+    match send_text(sink, req.channel, req.to, &req.text, on_wire_want_ack).await {
+        Ok(id) => {
+            let _ = pending.insert(id);
+            let _ = tx
+                .send(Event::MessageReceived(TextMessage {
+                    id,
+                    channel: req.channel,
+                    from: my_node,
+                    to: req.to,
+                    text: req.text,
+                    received_at: SystemTime::now(),
+                    direction: Direction::Outgoing,
+                    state: DeliveryState::Queued,
+                }))
+                .await;
+            if is_dm {
+                spawn_ack_timeout(tx.clone(), id);
             }
+            LoopStep::Continue
         }
-        Command::SetLora(settings) => match send_set_lora(sink, my_node, &settings).await {
-            Ok(()) => LoopStep::Continue,
-            Err(e) => LoopStep::Error(e.to_string()),
-        },
+        Err(e) => LoopStep::Error(e.to_string()),
+    }
+}
+
+async fn handle_config_command(
+    cmd: Command,
+    my_node: NodeId,
+    sink: &mut Pin<Box<impl futures::Sink<Vec<u8>, Error = crate::transport::TransportError> + ?Sized>>,
+) -> LoopStep {
+    let result = match cmd {
+        Command::SetOwner { long_name, short_name } => {
+            send_set_owner(sink, my_node, &long_name, &short_name).await
+        }
+        Command::SetLora(s) => send_set_lora(sink, my_node, &s).await,
+        Command::SetDevice(s) => send_set_device(sink, my_node, &s).await,
+        Command::SetPosition(s) => send_set_position(sink, my_node, &s).await,
+        Command::SetPower(s) => send_set_power(sink, my_node, &s).await,
+        Command::SetNetwork(s) => send_set_network(sink, my_node, &s).await,
+        Command::SetDisplay(s) => send_set_display(sink, my_node, &s).await,
+        Command::SetBluetooth(s) => send_set_bluetooth(sink, my_node, &s).await,
+        Command::Connect(_)
+        | Command::Disconnect
+        | Command::SendText { .. }
+        | Command::AckTimeout(_) => return LoopStep::Continue,
+    };
+    match result {
+        Ok(()) => LoopStep::Continue,
+        Err(e) => LoopStep::Error(e.to_string()),
     }
 }
 
@@ -386,9 +458,114 @@ async fn send_set_lora(
         tx_power: settings.tx_power,
         ..Default::default()
     };
-    let cfg = meshtastic::Config {
-        payload_variant: Some(meshtastic::config::PayloadVariant::Lora(lora)),
+    send_config(sink, my_node, meshtastic::config::PayloadVariant::Lora(lora)).await
+}
+
+async fn send_set_device(
+    sink: &mut Pin<Box<impl futures::Sink<Vec<u8>, Error = crate::transport::TransportError> + ?Sized>>,
+    my_node: NodeId,
+    s: &crate::domain::config::DeviceSettings,
+) -> Result<(), ConnectError> {
+    let device = meshtastic::config::DeviceConfig {
+        role: s.role as i32,
+        rebroadcast_mode: s.rebroadcast_mode as i32,
+        node_info_broadcast_secs: s.node_info_broadcast_secs,
+        disable_triple_click: s.disable_triple_click,
+        led_heartbeat_disabled: s.led_heartbeat_disabled,
+        tzdef: s.tzdef.clone(),
+        ..Default::default()
     };
+    send_config(sink, my_node, meshtastic::config::PayloadVariant::Device(device)).await
+}
+
+async fn send_set_position(
+    sink: &mut Pin<Box<impl futures::Sink<Vec<u8>, Error = crate::transport::TransportError> + ?Sized>>,
+    my_node: NodeId,
+    s: &crate::domain::config::PositionSettings,
+) -> Result<(), ConnectError> {
+    let position = meshtastic::config::PositionConfig {
+        position_broadcast_secs: s.broadcast_secs,
+        position_broadcast_smart_enabled: s.smart_enabled,
+        fixed_position: s.fixed_position,
+        gps_update_interval: s.gps_update_interval,
+        gps_mode: s.gps_mode as i32,
+        broadcast_smart_minimum_distance: s.smart_min_distance_m,
+        broadcast_smart_minimum_interval_secs: s.smart_min_interval_secs,
+        ..Default::default()
+    };
+    send_config(sink, my_node, meshtastic::config::PayloadVariant::Position(position)).await
+}
+
+async fn send_set_power(
+    sink: &mut Pin<Box<impl futures::Sink<Vec<u8>, Error = crate::transport::TransportError> + ?Sized>>,
+    my_node: NodeId,
+    s: &crate::domain::config::PowerSettings,
+) -> Result<(), ConnectError> {
+    let power = meshtastic::config::PowerConfig {
+        is_power_saving: s.is_power_saving,
+        on_battery_shutdown_after_secs: s.on_battery_shutdown_after_secs,
+        wait_bluetooth_secs: s.wait_bluetooth_secs,
+        ls_secs: s.ls_secs,
+        min_wake_secs: s.min_wake_secs,
+        ..Default::default()
+    };
+    send_config(sink, my_node, meshtastic::config::PayloadVariant::Power(power)).await
+}
+
+async fn send_set_network(
+    sink: &mut Pin<Box<impl futures::Sink<Vec<u8>, Error = crate::transport::TransportError> + ?Sized>>,
+    my_node: NodeId,
+    s: &crate::domain::config::NetworkSettings,
+) -> Result<(), ConnectError> {
+    let network = meshtastic::config::NetworkConfig {
+        wifi_enabled: s.wifi_enabled,
+        wifi_ssid: s.wifi_ssid.clone(),
+        wifi_psk: s.wifi_psk.clone(),
+        ntp_server: s.ntp_server.clone(),
+        eth_enabled: s.eth_enabled,
+        ..Default::default()
+    };
+    send_config(sink, my_node, meshtastic::config::PayloadVariant::Network(network)).await
+}
+
+async fn send_set_display(
+    sink: &mut Pin<Box<impl futures::Sink<Vec<u8>, Error = crate::transport::TransportError> + ?Sized>>,
+    my_node: NodeId,
+    s: &crate::domain::config::DisplaySettings,
+) -> Result<(), ConnectError> {
+    use crate::domain::config::{ClockFormat, ScreenOrientation};
+    let display = meshtastic::config::DisplayConfig {
+        screen_on_secs: s.screen_on_secs,
+        auto_screen_carousel_secs: s.auto_carousel_secs,
+        flip_screen: matches!(s.orientation, ScreenOrientation::Flipped),
+        units: s.units as i32,
+        heading_bold: s.heading_bold,
+        wake_on_tap_or_motion: s.wake_on_tap_or_motion,
+        use_12h_clock: matches!(s.clock, ClockFormat::H12),
+        ..Default::default()
+    };
+    send_config(sink, my_node, meshtastic::config::PayloadVariant::Display(display)).await
+}
+
+async fn send_set_bluetooth(
+    sink: &mut Pin<Box<impl futures::Sink<Vec<u8>, Error = crate::transport::TransportError> + ?Sized>>,
+    my_node: NodeId,
+    s: &crate::domain::config::BluetoothSettings,
+) -> Result<(), ConnectError> {
+    let bt = meshtastic::config::BluetoothConfig {
+        enabled: s.enabled,
+        mode: s.mode as i32,
+        fixed_pin: s.fixed_pin,
+    };
+    send_config(sink, my_node, meshtastic::config::PayloadVariant::Bluetooth(bt)).await
+}
+
+async fn send_config(
+    sink: &mut Pin<Box<impl futures::Sink<Vec<u8>, Error = crate::transport::TransportError> + ?Sized>>,
+    my_node: NodeId,
+    payload: meshtastic::config::PayloadVariant,
+) -> Result<(), ConnectError> {
+    let cfg = meshtastic::Config { payload_variant: Some(payload) };
     let admin = meshtastic::AdminMessage {
         payload_variant: Some(meshtastic::admin_message::PayloadVariant::SetConfig(cfg)),
         ..Default::default()
@@ -587,31 +764,36 @@ fn incoming_outcomes(msg: meshtastic::FromRadio) -> Vec<IncomingOutcome> {
 
 fn config_to_events(cfg: meshtastic::Config) -> Vec<IncomingOutcome> {
     use meshtastic::config::PayloadVariant;
+    use crate::session::handshake::{
+        bluetooth_from_proto, device_from_proto, display_from_proto, lora_from_proto,
+        network_from_proto, position_from_proto, power_from_proto,
+    };
     let Some(variant) = cfg.payload_variant else { return Vec::new() };
     match variant {
         PayloadVariant::Lora(lora) => {
             vec![IncomingOutcome::Event(Event::LoraUpdated(lora_from_proto(&lora)))]
         }
-        PayloadVariant::Device(_)
-        | PayloadVariant::Position(_)
-        | PayloadVariant::Power(_)
-        | PayloadVariant::Network(_)
-        | PayloadVariant::Display(_)
-        | PayloadVariant::Bluetooth(_)
-        | PayloadVariant::Security(_)
-        | PayloadVariant::Sessionkey(_)
-        | PayloadVariant::DeviceUi(_) => Vec::new(),
-    }
-}
-
-fn lora_from_proto(lora: &meshtastic::config::LoRaConfig) -> crate::domain::config::LoraSettings {
-    crate::domain::config::LoraSettings {
-        region: lora.region(),
-        modem_preset: lora.modem_preset(),
-        use_preset: lora.use_preset,
-        hop_limit: lora.hop_limit.min(7) as u8,
-        tx_enabled: lora.tx_enabled,
-        tx_power: lora.tx_power,
+        PayloadVariant::Device(d) => {
+            vec![IncomingOutcome::Event(Event::DeviceUpdated(device_from_proto(&d)))]
+        }
+        PayloadVariant::Position(p) => {
+            vec![IncomingOutcome::Event(Event::PositionUpdated(position_from_proto(&p)))]
+        }
+        PayloadVariant::Power(p) => {
+            vec![IncomingOutcome::Event(Event::PowerUpdated(power_from_proto(&p)))]
+        }
+        PayloadVariant::Network(n) => {
+            vec![IncomingOutcome::Event(Event::NetworkUpdated(network_from_proto(&n)))]
+        }
+        PayloadVariant::Display(d) => {
+            vec![IncomingOutcome::Event(Event::DisplayUpdated(display_from_proto(&d)))]
+        }
+        PayloadVariant::Bluetooth(b) => {
+            vec![IncomingOutcome::Event(Event::BluetoothUpdated(bluetooth_from_proto(&b)))]
+        }
+        PayloadVariant::Security(_) | PayloadVariant::Sessionkey(_) | PayloadVariant::DeviceUi(_) => {
+            Vec::new()
+        }
     }
 }
 
