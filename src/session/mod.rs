@@ -662,6 +662,8 @@ async fn handle_traceroute(
     }
 }
 
+const TRACEROUTE_HOP_LIMIT: u32 = 7;
+
 async fn send_traceroute(
     sink: SinkRef<'_, impl FrameSink + ?Sized>,
     my_node: NodeId,
@@ -683,6 +685,8 @@ async fn send_traceroute(
         channel: 0,
         id: id.0,
         want_ack: false,
+        hop_limit: TRACEROUTE_HOP_LIMIT,
+        hop_start: TRACEROUTE_HOP_LIMIT,
         payload_variant: Some(meshtastic::mesh_packet::PayloadVariant::Decoded(data)),
         ..Default::default()
     };

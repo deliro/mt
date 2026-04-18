@@ -68,7 +68,8 @@ fn main() -> eframe::Result<()> {
     eframe::run_native(
         "Meshtastic",
         NativeOptions::default(),
-        Box::new(move |_cc| {
+        Box::new(move |cc| {
+            mt::ui::install_fonts(&cc.egui_ctx);
             Ok(Box::new(App::new(profiles, profiles_path, cmd_tx, ev_rx, store)))
         }),
     )

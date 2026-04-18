@@ -2,10 +2,13 @@ pub mod channels;
 pub mod chat;
 pub mod connect;
 pub mod details;
+pub mod fonts;
 pub mod nodes;
 pub mod scan;
 pub mod settings;
 pub mod status;
+
+pub use fonts::install_fonts;
 
 use std::path::PathBuf;
 use std::time::Instant;
