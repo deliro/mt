@@ -1,5 +1,6 @@
 pub mod chat;
 pub mod connect;
+pub mod details;
 pub mod nodes;
 pub mod scan;
 pub mod settings;
@@ -11,6 +12,7 @@ use std::time::Instant;
 use eframe::egui;
 use tokio::sync::mpsc;
 
+use crate::domain::ids::NodeId;
 use crate::domain::profile::ConnectionProfile;
 use crate::domain::snapshot::DeviceSnapshot;
 use crate::session::Event;
@@ -32,6 +34,7 @@ pub struct AppState {
     pub last_error: Option<String>,
     pub active_tab: Tab,
     pub last_activity: Option<Instant>,
+    pub detail_node: Option<NodeId>,
     pub connect_ui: connect::ConnectUi,
     pub scan_ui: scan::ScanUi,
     pub chat_ui: chat::ChatUi,
@@ -177,8 +180,8 @@ impl eframe::App for App {
             }
             Tab::Nodes => {
                 egui::CentralPanel::default().show(ctx, |ui| {
-                    let AppState { snapshot, nodes_ui, .. } = &mut self.state;
-                    nodes::render(ui, snapshot, nodes_ui);
+                    let AppState { snapshot, nodes_ui, detail_node, .. } = &mut self.state;
+                    nodes::render(ui, snapshot, nodes_ui, detail_node);
                 });
             }
             Tab::Settings => {
@@ -188,6 +191,7 @@ impl eframe::App for App {
                 });
             }
         }
+        details::render_overlay(ctx, &self.state.snapshot, &mut self.state.detail_node);
         ctx.request_repaint_after(std::time::Duration::from_millis(100));
     }
 }

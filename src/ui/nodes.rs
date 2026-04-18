@@ -63,7 +63,13 @@ impl NodesUi {
     }
 }
 
-pub fn render(ui: &mut egui::Ui, snapshot: &DeviceSnapshot, nodes_ui: &mut NodesUi) {
+#[allow(clippy::too_many_lines)]
+pub fn render(
+    ui: &mut egui::Ui,
+    snapshot: &DeviceSnapshot,
+    nodes_ui: &mut NodesUi,
+    detail_node: &mut Option<NodeId>,
+) {
     let now_system = SystemTime::now();
     let now_inst = Instant::now();
     let mut nodes: Vec<&Node> = snapshot.nodes.values().collect();
@@ -122,7 +128,15 @@ pub fn render(ui: &mut egui::Ui, snapshot: &DeviceSnapshot, nodes_ui: &mut Nodes
                 body.row(18.0, |mut row| {
                     row.col(|ui| {
                         paint_flash(ui, flash);
-                        ui.label(display_name(node));
+                        if ui
+                            .add(
+                                egui::Label::new(display_name(node))
+                                    .sense(egui::Sense::click()),
+                            )
+                            .clicked()
+                        {
+                            *detail_node = Some(node.id);
+                        }
                     });
                     row.col(|ui| {
                         paint_flash(ui, flash);

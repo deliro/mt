@@ -23,6 +23,10 @@ pub fn render_messages(ui: &mut egui::Ui, state: &mut AppState) {
     message_list(ui, state, active);
 }
 
+pub fn render_overlay(ctx: &egui::Context, state: &mut AppState) {
+    crate::ui::details::render_overlay(ctx, &state.snapshot, &mut state.detail_node);
+}
+
 pub fn render_composer(
     ui: &mut egui::Ui,
     state: &mut AppState,
@@ -73,9 +77,11 @@ fn channel_label(ch: &crate::domain::channel::Channel) -> String {
     }
 }
 
-fn message_list(ui: &mut egui::Ui, state: &AppState, active: ChannelIndex) {
+fn message_list(ui: &mut egui::Ui, state: &mut AppState, active: ChannelIndex) {
     let messages: Vec<_> =
         state.snapshot.messages.iter().filter(|m| m.channel == active).cloned().collect();
+
+    let mut open_detail: Option<NodeId> = None;
 
     egui::ScrollArea::vertical().stick_to_bottom(true).auto_shrink([false; 2]).show(ui, |ui| {
         if messages.is_empty() {
@@ -89,17 +95,20 @@ fn message_list(ui: &mut egui::Ui, state: &AppState, active: ChannelIndex) {
             ui.horizontal_wrapped(|ui| {
                 ui.monospace(format_time(m.received_at));
                 let sender_name = node_display_name(state, m.from);
-                match m.direction {
+                let sender_text = match m.direction {
                     Direction::Outgoing => {
-                        ui.colored_label(egui::Color32::LIGHT_BLUE, sender_name);
+                        egui::RichText::new(sender_name).color(egui::Color32::LIGHT_BLUE)
                     }
-                    Direction::Incoming => {
-                        ui.strong(sender_name);
-                    }
+                    Direction::Incoming => egui::RichText::new(sender_name).strong(),
+                };
+                if clickable_label(ui, sender_text) {
+                    open_detail = Some(m.from);
                 }
                 if let Recipient::Node(target) = m.to {
-                    let label = node_display_name(state, target);
-                    ui.label(format!("-> {label}"));
+                    let label = format!("-> {}", node_display_name(state, target));
+                    if clickable_label(ui, egui::RichText::new(label)) {
+                        open_detail = Some(target);
+                    }
                 }
                 ui.label(&m.text);
                 if m.direction == Direction::Outgoing {
@@ -108,6 +117,14 @@ fn message_list(ui: &mut egui::Ui, state: &AppState, active: ChannelIndex) {
             });
         }
     });
+
+    if let Some(id) = open_detail {
+        state.detail_node = Some(id);
+    }
+}
+
+fn clickable_label(ui: &mut egui::Ui, text: egui::RichText) -> bool {
+    ui.add(egui::Label::new(text).sense(egui::Sense::click())).clicked()
 }
 
 fn composer(
