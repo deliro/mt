@@ -17,13 +17,37 @@ pub struct ChatUi {
     pub dm_target: Option<NodeId>,
     pub last_seen_count: usize,
     pub follow_bottom: bool,
+    pub search: String,
 }
 
 pub fn render_messages(ui: &mut egui::Ui, state: &mut AppState) {
     channel_tabs(ui, state);
+    search_bar(ui, state);
     ui.separator();
     let active = active_channel(state);
     message_list(ui, state, active);
+}
+
+fn search_bar(ui: &mut egui::Ui, state: &mut AppState) {
+    ui.horizontal(|ui| {
+        ui.label("Search:");
+        let resp = ui.add(
+            egui::TextEdit::singleline(&mut state.chat_ui.search)
+                .hint_text("text or sender")
+                .desired_width(220.0),
+        );
+        if resp.changed() {
+            // Force the scroll area to jump back to the bottom of the newly
+            // filtered list so search hits are visible without hunting.
+            state.chat_ui.follow_bottom = true;
+            state.chat_ui.last_seen_count = 0;
+        }
+        if !state.chat_ui.search.is_empty() && ui.small_button("clear").clicked() {
+            state.chat_ui.search.clear();
+            state.chat_ui.follow_bottom = true;
+            state.chat_ui.last_seen_count = 0;
+        }
+    });
 }
 
 
@@ -78,8 +102,15 @@ fn channel_label(ch: &crate::domain::channel::Channel) -> String {
 }
 
 fn message_list(ui: &mut egui::Ui, state: &mut AppState, active: ChannelIndex) {
-    let messages: Vec<_> =
-        state.snapshot.messages.iter().filter(|m| m.channel == active).cloned().collect();
+    let query = state.chat_ui.search.trim().to_lowercase();
+    let messages: Vec<_> = state
+        .snapshot
+        .messages
+        .iter()
+        .filter(|m| m.channel == active)
+        .filter(|m| query.is_empty() || message_matches(state, m, &query))
+        .cloned()
+        .collect();
 
     let mut open_detail: Option<NodeId> = None;
     let new_messages = messages.len() > state.chat_ui.last_seen_count;
@@ -131,7 +162,11 @@ fn render_message_rows(
     if messages.is_empty() {
         ui.vertical_centered(|ui| {
             ui.add_space(40.0);
-            ui.weak("No messages yet on this channel.");
+            if state.chat_ui.search.trim().is_empty() {
+                ui.weak("No messages yet on this channel.");
+            } else {
+                ui.weak("No messages match the current search.");
+            }
         });
         return;
     }
@@ -240,6 +275,25 @@ fn render_delivery(ui: &mut egui::Ui, state: &DeliveryState) {
 
 fn node_display_name(state: &AppState, id: NodeId) -> String {
     state.snapshot.nodes.get(&id).map_or_else(|| format!("!{:08x}", id.0), node_label)
+}
+
+fn message_matches(
+    state: &AppState,
+    m: &crate::domain::message::TextMessage,
+    query_lower: &str,
+) -> bool {
+    if m.text.to_lowercase().contains(query_lower) {
+        return true;
+    }
+    if node_display_name(state, m.from).to_lowercase().contains(query_lower) {
+        return true;
+    }
+    if let Recipient::Node(to) = m.to
+        && node_display_name(state, to).to_lowercase().contains(query_lower)
+    {
+        return true;
+    }
+    false
 }
 
 fn node_label(node: &crate::domain::node::Node) -> String {
