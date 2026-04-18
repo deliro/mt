@@ -1,13 +1,15 @@
+use serde::{Deserialize, Serialize};
+
 use crate::domain::ids::ChannelIndex;
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ChannelRole {
     Primary,
     Secondary,
     Disabled,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Channel {
     pub index: ChannelIndex,
     pub role: ChannelRole,

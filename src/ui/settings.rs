@@ -36,6 +36,7 @@ pub enum Section {
     ExtNotif,
     Canned,
     RangeTest,
+    Backup,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -56,6 +57,10 @@ pub struct SettingsUi {
     pub previous_fixed_enabled: bool,
     pub pending_admin: Option<AdminAction>,
     pub security_new_admin_key: String,
+    pub backup_import_open: bool,
+    pub backup_import_text: String,
+    pub backup_import_error: Option<String>,
+    pub backup_last_action: Option<String>,
 }
 
 #[derive(Default, Clone)]
@@ -107,11 +112,16 @@ pub fn render(
 ) {
     sync_from_snapshot(snapshot, settings_ui);
     egui::ScrollArea::vertical().auto_shrink([false; 2]).show(ui, |ui| {
-        sections(ui, settings_ui, cmd);
+        sections(ui, snapshot, settings_ui, cmd);
     });
 }
 
-fn sections(ui: &mut egui::Ui, s: &mut SettingsUi, cmd: &mpsc::UnboundedSender<Command>) {
+fn sections(
+    ui: &mut egui::Ui,
+    snapshot: &DeviceSnapshot,
+    s: &mut SettingsUi,
+    cmd: &mpsc::UnboundedSender<Command>,
+) {
     collapsible(ui, "Owner", |ui| owner_section(ui, s, cmd));
     collapsible(ui, "LoRa", |ui| lora_section(ui, s, cmd));
     collapsible(ui, "Device", |ui| device_section(ui, s, cmd));
@@ -128,6 +138,7 @@ fn sections(ui: &mut egui::Ui, s: &mut SettingsUi, cmd: &mpsc::UnboundedSender<C
     collapsible(ui, "External Notification", |ui| ext_notif_section(ui, s, cmd));
     collapsible(ui, "Canned Messages", |ui| canned_section(ui, s, cmd));
     collapsible(ui, "Range Test", |ui| range_test_section(ui, s, cmd));
+    collapsible(ui, "Backup / restore", |ui| backup_section(ui, snapshot, s, cmd));
     collapsible(ui, "Admin", |ui| admin_section(ui, s));
     collapsible(ui, "Storage", |ui| storage_section(ui, s));
     admin_confirm_modal(ui.ctx(), s, cmd);
@@ -1506,6 +1517,179 @@ fn range_test_section(
     );
 }
 
+// ---- Backup / restore ----
+
+fn backup_section(
+    ui: &mut egui::Ui,
+    snapshot: &DeviceSnapshot,
+    s: &mut SettingsUi,
+    cmd: &mpsc::UnboundedSender<Command>,
+) {
+    ui.label(egui::RichText::new(
+        "Export the current device configuration to JSON (for backup / cloning), or import a \
+         previous export. Security keys are intentionally omitted — they stay device-specific.",
+    ).weak());
+    ui.horizontal(|ui| {
+        if ui
+            .button("Copy config JSON")
+            .on_hover_text(
+                "Serialise every core + module config section and the channel list into a JSON \
+                 document, then copy it to the clipboard. Safe to paste into a file and keep as \
+                 a backup.",
+            )
+            .clicked()
+        {
+            let export = crate::domain::config_export::export_snapshot(snapshot);
+            ui.ctx().copy_text(crate::domain::config_export::encode(&export));
+            s.backup_last_action = Some("Exported to clipboard".into());
+        }
+        if ui
+            .button("Import config JSON…")
+            .on_hover_text(
+                "Paste a previously exported JSON document to replay every non-empty section \
+                 onto this device. Each section goes through its own admin round-trip.",
+            )
+            .clicked()
+        {
+            s.backup_import_open = true;
+            s.backup_import_error = None;
+            s.backup_last_action = None;
+        }
+    });
+    if let Some(msg) = s.backup_last_action.as_ref() {
+        ui.colored_label(egui::Color32::LIGHT_GREEN, msg);
+    }
+    backup_import_modal(ui.ctx(), s, cmd);
+    if s.dirty.is(Section::Backup) {
+        s.dirty.clear(Section::Backup);
+    }
+}
+
+fn backup_import_modal(
+    ctx: &egui::Context,
+    s: &mut SettingsUi,
+    cmd: &mpsc::UnboundedSender<Command>,
+) {
+    if !s.backup_import_open {
+        return;
+    }
+    let mut open = s.backup_import_open;
+    let mut apply = false;
+    egui::Window::new("Import config JSON")
+        .open(&mut open)
+        .collapsible(false)
+        .resizable(true)
+        .default_width(520.0)
+        .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+        .show(ctx, |ui| {
+            ui.colored_label(
+                egui::Color32::LIGHT_RED,
+                "⚠ Every non-empty section in the JSON overwrites the device's current config.",
+            );
+            ui.label("Paste the JSON here:");
+            egui::ScrollArea::vertical().max_height(300.0).show(ui, |ui| {
+                ui.add(
+                    egui::TextEdit::multiline(&mut s.backup_import_text)
+                        .desired_rows(12)
+                        .desired_width(f32::INFINITY),
+                );
+            });
+            if let Some(err) = s.backup_import_error.as_ref() {
+                ui.colored_label(egui::Color32::LIGHT_RED, err);
+            }
+            ui.horizontal(|ui| {
+                if ui.button("Cancel").clicked() {
+                    s.backup_import_open = false;
+                }
+                if ui
+                    .add(
+                        egui::Button::new("Apply")
+                            .fill(egui::Color32::from_rgb(150, 40, 40)),
+                    )
+                    .clicked()
+                {
+                    apply = true;
+                }
+            });
+        });
+    s.backup_import_open = open && !apply;
+    if apply {
+        apply_import(s, cmd);
+    }
+}
+
+fn apply_import(s: &mut SettingsUi, cmd: &mpsc::UnboundedSender<Command>) {
+    match crate::domain::config_export::decode(&s.backup_import_text) {
+        Ok(export) => {
+            dispatch_import(&export, cmd);
+            s.backup_import_open = false;
+            s.backup_import_text.clear();
+            s.backup_import_error = None;
+            s.backup_last_action = Some("Import dispatched — watch for each Save to echo back".into());
+        }
+        Err(e) => {
+            s.backup_import_error = Some(e.to_string());
+        }
+    }
+}
+
+fn dispatch_import(
+    export: &crate::domain::config_export::ConfigExport,
+    cmd: &mpsc::UnboundedSender<Command>,
+) {
+    if !export.owner.long_name.is_empty() || !export.owner.short_name.is_empty() {
+        let _ = cmd.send(Command::SetOwner {
+            long_name: export.owner.long_name.clone(),
+            short_name: export.owner.short_name.clone(),
+        });
+    }
+    if let Some(v) = export.lora.clone() {
+        let _ = cmd.send(Command::SetLora(v));
+    }
+    if let Some(v) = export.device.clone() {
+        let _ = cmd.send(Command::SetDevice(v));
+    }
+    if let Some(v) = export.position.clone() {
+        let _ = cmd.send(Command::SetPosition(v));
+    }
+    if let Some(v) = export.power.clone() {
+        let _ = cmd.send(Command::SetPower(v));
+    }
+    if let Some(v) = export.network.clone() {
+        let _ = cmd.send(Command::SetNetwork(v));
+    }
+    if let Some(v) = export.display.clone() {
+        let _ = cmd.send(Command::SetDisplay(v));
+    }
+    if let Some(v) = export.bluetooth.clone() {
+        let _ = cmd.send(Command::SetBluetooth(v));
+    }
+    if let Some(v) = export.mqtt.clone() {
+        let _ = cmd.send(Command::SetMqtt(v));
+    }
+    if let Some(v) = export.telemetry.clone() {
+        let _ = cmd.send(Command::SetTelemetryCfg(v));
+    }
+    if let Some(v) = export.neighbor_info.clone() {
+        let _ = cmd.send(Command::SetNeighborInfo(v));
+    }
+    if let Some(v) = export.store_forward.clone() {
+        let _ = cmd.send(Command::SetStoreForward(v));
+    }
+    if let Some(v) = export.ext_notif.clone() {
+        let _ = cmd.send(Command::SetExtNotif(v));
+    }
+    if let Some(v) = export.canned.clone() {
+        let _ = cmd.send(Command::SetCanned(v));
+    }
+    if let Some(v) = export.range_test.clone() {
+        let _ = cmd.send(Command::SetRangeTest(v));
+    }
+    for channel in &export.channels {
+        let _ = cmd.send(Command::SetChannel(channel.clone()));
+    }
+}
+
 // ---- Commit helper ----
 
 fn commit(
@@ -1546,6 +1730,7 @@ const fn section_label(section: Section) -> &'static str {
         Section::ExtNotif => "External Notification",
         Section::Canned => "Canned Messages",
         Section::RangeTest => "Range Test",
+        Section::Backup => "Backup",
     }
 }
 

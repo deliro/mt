@@ -1,12 +1,41 @@
+use serde::{Deserialize, Serialize};
+
 use crate::proto::meshtastic::config::bluetooth_config::PairingMode;
 use crate::proto::meshtastic::config::device_config::{RebroadcastMode, Role as DeviceRole};
 use crate::proto::meshtastic::config::display_config::DisplayUnits;
 use crate::proto::meshtastic::config::lo_ra_config::{ModemPreset, RegionCode};
 use crate::proto::meshtastic::config::position_config::GpsMode;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// Serde adapter that serialises prost enums as their underlying `i32` wire
+/// value. Keeps backups round-trippable across firmware versions that extend
+/// enums with new variants — unknown values simply fail `TryFrom` on import
+/// with a clear error, rather than corrupting data.
+mod serde_proto_enum {
+    pub fn serialize<E, S>(value: &E, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        E: Copy + Into<i32>,
+        S: serde::Serializer,
+    {
+        serializer.serialize_i32((*value).into())
+    }
+
+    pub fn deserialize<'de, E, D>(deserializer: D) -> Result<E, D::Error>
+    where
+        E: TryFrom<i32>,
+        <E as TryFrom<i32>>::Error: std::fmt::Display,
+        D: serde::Deserializer<'de>,
+    {
+        use serde::Deserialize as _;
+        let n = i32::deserialize(deserializer)?;
+        E::try_from(n).map_err(serde::de::Error::custom)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LoraSettings {
+    #[serde(with = "serde_proto_enum")]
     pub region: RegionCode,
+    #[serde(with = "serde_proto_enum")]
     pub modem_preset: ModemPreset,
     pub use_preset: bool,
     pub hop_limit: u8,
@@ -27,9 +56,11 @@ impl Default for LoraSettings {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DeviceSettings {
+    #[serde(with = "serde_proto_enum")]
     pub role: DeviceRole,
+    #[serde(with = "serde_proto_enum")]
     pub rebroadcast_mode: RebroadcastMode,
     pub node_info_broadcast_secs: u32,
     pub disable_triple_click: bool,
@@ -50,12 +81,13 @@ impl Default for DeviceSettings {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PositionSettings {
     pub broadcast_secs: u32,
     pub smart_enabled: bool,
     pub fixed_position: bool,
     pub gps_update_interval: u32,
+    #[serde(with = "serde_proto_enum")]
     pub gps_mode: GpsMode,
     pub smart_min_distance_m: u32,
     pub smart_min_interval_secs: u32,
@@ -75,7 +107,7 @@ impl Default for PositionSettings {
     }
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PowerSettings {
     pub is_power_saving: bool,
     pub on_battery_shutdown_after_secs: u32,
@@ -84,7 +116,7 @@ pub struct PowerSettings {
     pub min_wake_secs: u32,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NetworkSettings {
     pub wifi_enabled: bool,
     pub wifi_ssid: String,
@@ -93,7 +125,7 @@ pub struct NetworkSettings {
     pub eth_enabled: bool,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MqttSettings {
     pub enabled: bool,
     pub address: String,
@@ -106,13 +138,13 @@ pub struct MqttSettings {
     pub map: MqttMapReport,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MqttPayloadOptions {
     pub encrypted: bool,
     pub json: bool,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MqttMapReport {
     pub enabled: bool,
     pub publish_location: bool,
@@ -120,7 +152,7 @@ pub struct MqttMapReport {
     pub position_precision: u32,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TelemetrySettings {
     pub device: DeviceMetricsCfg,
     pub environment: EnvironmentMetricsCfg,
@@ -129,13 +161,13 @@ pub struct TelemetrySettings {
     pub health: HealthMetricsCfg,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DeviceMetricsCfg {
     pub enabled: bool,
     pub update_interval_secs: u32,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EnvironmentMetricsCfg {
     pub measurement_enabled: bool,
     pub screen_enabled: bool,
@@ -143,35 +175,35 @@ pub struct EnvironmentMetricsCfg {
     pub update_interval_secs: u32,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AirQualityMetricsCfg {
     pub measurement_enabled: bool,
     pub screen_enabled: bool,
     pub update_interval_secs: u32,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PowerMetricsCfg {
     pub measurement_enabled: bool,
     pub screen_enabled: bool,
     pub update_interval_secs: u32,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HealthMetricsCfg {
     pub measurement_enabled: bool,
     pub screen_enabled: bool,
     pub update_interval_secs: u32,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NeighborInfoSettings {
     pub enabled: bool,
     pub transmit_over_lora: bool,
     pub update_interval_secs: u32,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StoreForwardSettings {
     pub enabled: bool,
     pub is_server: bool,
@@ -187,7 +219,7 @@ pub struct StoreForwardSettings {
 /// `SetConfig(Security)` round-trip doesn't wipe the keypair. It is
 /// intentionally never rendered in the UI, and this struct's `Debug`
 /// impl redacts it.
-#[derive(Clone, Default, PartialEq, Eq)]
+#[derive(Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SecuritySettings {
     pub public_key: Vec<u8>,
     pub private_key: Vec<u8>,
@@ -197,7 +229,7 @@ pub struct SecuritySettings {
     pub console: ConsoleAccess,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExternalNotificationSettings {
     pub enabled: bool,
     pub output_ms: u32,
@@ -207,7 +239,7 @@ pub struct ExternalNotificationSettings {
     pub sound: ExtNotifSound,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExtNotifOutputs {
     pub output_pin: u32,
     pub output_vibra_pin: u32,
@@ -215,26 +247,26 @@ pub struct ExtNotifOutputs {
     pub active_high: bool,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExtNotifAlerts {
     pub message: ExtNotifTargets,
     pub bell: ExtNotifTargets,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExtNotifTargets {
     pub led: bool,
     pub vibra: bool,
     pub buzzer: bool,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExtNotifSound {
     pub use_pwm: bool,
     pub use_i2s_as_buzzer: bool,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CannedMessageSettings {
     pub rotary1_enabled: bool,
     pub updown1_enabled: bool,
@@ -244,7 +276,7 @@ pub struct CannedMessageSettings {
     pub rotary_pin_press: u32,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RangeTestSettings {
     pub enabled: bool,
     pub sender_secs: u32,
@@ -265,31 +297,32 @@ impl std::fmt::Debug for SecuritySettings {
     }
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ConsoleAccess {
     pub serial_enabled: bool,
     pub debug_log_api_enabled: bool,
 }
 
-#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ScreenOrientation {
     #[default]
     Normal,
     Flipped,
 }
 
-#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ClockFormat {
     #[default]
     H24,
     H12,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DisplaySettings {
     pub screen_on_secs: u32,
     pub auto_carousel_secs: u32,
     pub orientation: ScreenOrientation,
+    #[serde(with = "serde_proto_enum")]
     pub units: DisplayUnits,
     pub clock: ClockFormat,
     pub heading_bold: bool,
@@ -310,9 +343,10 @@ impl Default for DisplaySettings {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BluetoothSettings {
     pub enabled: bool,
+    #[serde(with = "serde_proto_enum")]
     pub mode: PairingMode,
     pub fixed_pin: u32,
 }
