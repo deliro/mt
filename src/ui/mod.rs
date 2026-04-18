@@ -105,13 +105,16 @@ impl App {
         ev_rx: mpsc::Receiver<Event>,
         store: Option<HistoryStore>,
     ) -> Self {
-        let mut reconnect = reconnect::ReconnectUi::default();
-        if let Some(key) = last_active_key.as_ref()
-            && let Some(profile) = profiles.iter().find(|p| &p.key() == key).cloned()
-        {
+        let pre_armed = last_active_key.as_ref().and_then(|key| {
+            profiles.iter().find(|p| &p.key() == key).cloned()
+        });
+        let mut reconnect = reconnect::ReconnectUi {
+            last_persisted_key: last_active_key,
+            ..reconnect::ReconnectUi::default()
+        };
+        if let Some(profile) = pre_armed {
             reconnect.arm_from_startup(profile);
         }
-        reconnect.last_active = last_active_key;
         Self {
             state: AppState { profiles, reconnect, ..AppState::default() },
             cmd_tx,
@@ -215,16 +218,22 @@ impl App {
     }
 
     fn persist_last_active(&mut self) {
-        let key = self.state.reconnect.profile.as_ref().map(crate::domain::profile::ConnectionProfile::key);
-        if key == self.state.reconnect.last_active {
+        let key = self
+            .state
+            .reconnect
+            .profile
+            .as_ref()
+            .map(crate::domain::profile::ConnectionProfile::key);
+        if key == self.state.reconnect.last_persisted_key {
             return;
         }
-        self.state.reconnect.last_active = key;
         if let Some(store) = self.store.as_ref()
-            && let Err(e) = store.save_last_active(self.state.reconnect.last_active.as_deref())
+            && let Err(e) = store.save_last_active(key.as_deref())
         {
             warn!(%e, "persist last-active profile failed");
+            return;
         }
+        self.state.reconnect.last_persisted_key = key;
     }
 
     fn apply_node_updated(&mut self, node: crate::domain::node::Node) {

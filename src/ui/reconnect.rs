@@ -14,12 +14,14 @@ const BACKOFF_SCHEDULE_SECS: &[u64] = &[3, 10, 30, 60];
 pub struct ReconnectUi {
     /// Profile to auto-reconnect to. Set on every successful user-initiated
     /// Connect; cleared on user-initiated Disconnect. Populated from the
-    /// persisted `last_active` on startup so the very first boot reconnects
-    /// without a click.
+    /// persisted `last_persisted_key` on startup so the very first boot
+    /// reconnects without a click.
     pub profile: Option<ConnectionProfile>,
-    /// `key()` of the profile we should persist as "last active" the next
-    /// time the profile list is saved.
-    pub last_active: Option<String>,
+    /// Mirror of the `last_active_key` row currently in the `settings`
+    /// table. Used purely as a dirty-check so we only write on real changes
+    /// — never touched by UI code, only by the persistence helper after a
+    /// successful write (or during startup load).
+    pub last_persisted_key: Option<String>,
     /// Current attempt number — 0 while connected or idle, N for the Nth
     /// pending reconnect.
     pub attempt: u32,
@@ -32,7 +34,6 @@ pub struct ReconnectUi {
 
 impl ReconnectUi {
     pub fn arm_from_startup(&mut self, profile: ConnectionProfile) {
-        self.last_active = Some(profile.key());
         self.profile = Some(profile);
         self.attempt = 0;
         self.next_at = Some(Instant::now());
@@ -42,7 +43,6 @@ impl ReconnectUi {
     /// User clicked Connect on a profile.
     pub fn mark_user_connect(&mut self, profile: &ConnectionProfile) {
         self.profile = Some(profile.clone());
-        self.last_active = Some(profile.key());
         self.attempt = 0;
         self.next_at = None;
         self.intentional_disconnect = false;
