@@ -128,13 +128,23 @@ pub fn render(
     }
     if let Some((name, addr)) = start_connect {
         let profile = ConnectionProfile::Ble { name, address: addr };
+        // Persist the profile as soon as the user chooses it — otherwise
+        // auto-reconnect would have nothing to match last_active against on
+        // restart.
+        if !profiles.iter().any(|p| p.key() == profile.key()) {
+            profiles.push(profile.clone());
+            *profiles_dirty = true;
+        }
         reconnect.mark_user_connect(&profile);
         let _ = cmd.send(Command::Connect(profile));
         close = true;
     }
     if let Some((name, addr)) = save_profile {
-        profiles.push(ConnectionProfile::Ble { name, address: addr });
-        *profiles_dirty = true;
+        let profile = ConnectionProfile::Ble { name, address: addr };
+        if !profiles.iter().any(|p| p.key() == profile.key()) {
+            profiles.push(profile);
+            *profiles_dirty = true;
+        }
     }
     if close {
         ui_state.open = false;

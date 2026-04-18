@@ -76,8 +76,15 @@ fn list_profiles(
     if let Some(i) = delete_idx
         && i < state.profiles.len()
     {
-        let _ = state.profiles.remove(i);
+        let removed = state.profiles.remove(i);
         state.profiles_dirty = true;
+        // If the user nuked the profile we were about to auto-reconnect to,
+        // make sure we don't keep chasing a ghost.
+        if state.reconnect.profile.as_ref().is_some_and(|p| p.key() == removed.key()) {
+            state.reconnect.profile = None;
+            state.reconnect.next_at = None;
+            state.reconnect.attempt = 0;
+        }
     }
 }
 

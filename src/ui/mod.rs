@@ -108,22 +108,30 @@ impl App {
         let pre_armed = last_active_key.as_ref().and_then(|key| {
             profiles.iter().find(|p| &p.key() == key).cloned()
         });
-        match (last_active_key.as_deref(), pre_armed.as_ref()) {
+        let effective_key = match (last_active_key.as_deref(), pre_armed.as_ref()) {
             (Some(key), Some(profile)) => {
                 tracing::info!(%key, name = profile.name(), "auto-reconnect armed from last_active");
+                last_active_key
             }
             (Some(key), None) => {
                 tracing::warn!(
                     %key,
-                    "last_active profile key present but not found in profiles list — auto-reconnect disabled"
+                    "last_active profile key orphaned — clearing so the warning doesn't repeat next launch"
                 );
+                if let Some(store) = store.as_ref()
+                    && let Err(e) = store.save_last_active(None)
+                {
+                    tracing::warn!(%e, "failed to clear orphaned last_active");
+                }
+                None
             }
             (None, _) => {
                 tracing::info!("no last_active profile on startup — user must connect manually");
+                None
             }
-        }
+        };
         let mut reconnect = reconnect::ReconnectUi {
-            last_persisted_key: last_active_key,
+            last_persisted_key: effective_key,
             ..reconnect::ReconnectUi::default()
         };
         if let Some(profile) = pre_armed {
