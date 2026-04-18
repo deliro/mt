@@ -57,6 +57,8 @@ pub enum PersistError {
     Serialize(#[from] toml::ser::Error),
     #[error("sqlite: {0}")]
     Sqlite(#[from] rusqlite::Error),
+    #[error("json: {0}")]
+    Json(#[from] serde_json::Error),
     #[error("state decode: {0}")]
     StateDecode(String),
 }

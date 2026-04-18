@@ -69,6 +69,7 @@ pub fn render(
     ui_state: &mut ScanUi,
     cmd: &mpsc::UnboundedSender<Command>,
     profiles: &mut Vec<ConnectionProfile>,
+    profiles_dirty: &mut bool,
     reconnect: &mut crate::ui::reconnect::ReconnectUi,
 ) {
     if !ui_state.open {
@@ -133,6 +134,7 @@ pub fn render(
     }
     if let Some((name, addr)) = save_profile {
         profiles.push(ConnectionProfile::Ble { name, address: addr });
+        *profiles_dirty = true;
     }
     if close {
         ui_state.open = false;

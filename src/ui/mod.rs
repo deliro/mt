@@ -13,7 +13,6 @@ pub mod status;
 
 pub use fonts::install_fonts;
 
-use std::path::PathBuf;
 use std::time::Instant;
 
 use eframe::egui;
@@ -56,6 +55,9 @@ pub struct AppState {
     pub remote_admin: remote_admin::RemoteAdminUi,
     pub probed_nodes: std::collections::HashSet<NodeId>,
     pub reconnect: reconnect::ReconnectUi,
+    /// Set to `true` by any mutation of `profiles` — the app loop picks it
+    /// up and persists the list through the `HistoryStore`.
+    pub profiles_dirty: bool,
 }
 
 #[derive(Default)]
@@ -83,7 +85,6 @@ pub struct App {
     state: AppState,
     cmd_tx: mpsc::UnboundedSender<Command>,
     ev_rx: mpsc::Receiver<Event>,
-    profiles_path: PathBuf,
     store: Option<HistoryStore>,
 }
 
@@ -91,7 +92,6 @@ impl App {
     pub fn new(
         profiles: Vec<ConnectionProfile>,
         last_active_key: Option<String>,
-        profiles_path: PathBuf,
         cmd_tx: mpsc::UnboundedSender<Command>,
         ev_rx: mpsc::Receiver<Event>,
         store: Option<HistoryStore>,
@@ -107,7 +107,6 @@ impl App {
             state: AppState { profiles, reconnect, ..AppState::default() },
             cmd_tx,
             ev_rx,
-            profiles_path,
             store,
         }
     }
@@ -190,11 +189,9 @@ impl App {
             return;
         }
         self.state.reconnect.last_active = key;
-        if let Err(e) = crate::persist::profiles::save_to(
-            &self.profiles_path,
-            &self.state.profiles,
-            self.state.reconnect.last_active.as_deref(),
-        ) {
+        if let Some(store) = self.store.as_ref()
+            && let Err(e) = store.save_last_active(self.state.reconnect.last_active.as_deref())
+        {
             warn!(%e, "persist last-active profile failed");
         }
     }
@@ -377,6 +374,14 @@ const fn is_activity(ev: &Event) -> bool {
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.drain_events();
+        if self.state.profiles_dirty {
+            if let Some(store) = self.store.as_ref()
+                && let Err(e) = store.save_profiles(&self.state.profiles)
+            {
+                warn!(%e, "persist profiles failed");
+            }
+            self.state.profiles_dirty = false;
+        }
         let now = Instant::now();
         let disconnected = matches!(self.state.status, SessionStatus::Disconnected);
         let connecting = matches!(self.state.status, SessionStatus::Connecting);
@@ -403,12 +408,13 @@ impl eframe::App for App {
             &mut self.state.scan_ui,
             &self.cmd_tx,
             &mut self.state.profiles,
+            &mut self.state.profiles_dirty,
             &mut self.state.reconnect,
         );
 
         if !self.state.connected() {
             egui::CentralPanel::default().show(ctx, |ui| {
-                connect::render(ui, &mut self.state, &self.cmd_tx, &self.profiles_path);
+                connect::render(ui, &mut self.state, &self.cmd_tx);
             });
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
             return;

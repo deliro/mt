@@ -6,7 +6,11 @@ use rusqlite::{Connection, OptionalExtension, params};
 use crate::domain::ids::{BROADCAST_NODE, ChannelIndex, NodeId, PacketId};
 use crate::domain::message::{DeliveryState, Direction, Recipient, TextMessage};
 use crate::domain::node::{Node, NodeRole, Position};
+use crate::domain::profile::ConnectionProfile;
 use crate::error::PersistError;
+
+const SETTING_PROFILES: &str = "profiles_json";
+const SETTING_LAST_ACTIVE: &str = "last_active_key";
 
 pub struct HistoryStore {
     conn: Connection,
@@ -64,7 +68,59 @@ impl HistoryStore {
         add_column_if_missing(&conn, "nodes", "is_favorite", "INTEGER NOT NULL DEFAULT 0")?;
         add_column_if_missing(&conn, "nodes", "is_ignored", "INTEGER NOT NULL DEFAULT 0")?;
         add_column_if_missing(&conn, "nodes", "public_key", "BLOB NOT NULL DEFAULT x''")?;
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS settings (
+                k TEXT PRIMARY KEY,
+                v TEXT NOT NULL
+            );",
+        )?;
         Ok(Self { conn })
+    }
+
+    // ---- Profiles + settings ----
+
+    pub fn load_profiles(&self) -> Result<Vec<ConnectionProfile>, PersistError> {
+        let Some(blob) = self.load_setting(SETTING_PROFILES)? else {
+            return Ok(Vec::new());
+        };
+        Ok(serde_json::from_str::<Vec<ConnectionProfile>>(&blob)?)
+    }
+
+    pub fn save_profiles(&self, profiles: &[ConnectionProfile]) -> Result<(), PersistError> {
+        let blob = serde_json::to_string(profiles)?;
+        self.save_setting(SETTING_PROFILES, Some(&blob))
+    }
+
+    pub fn load_last_active(&self) -> Result<Option<String>, PersistError> {
+        self.load_setting(SETTING_LAST_ACTIVE)
+    }
+
+    pub fn save_last_active(&self, value: Option<&str>) -> Result<(), PersistError> {
+        self.save_setting(SETTING_LAST_ACTIVE, value)
+    }
+
+    fn load_setting(&self, key: &str) -> Result<Option<String>, PersistError> {
+        let value: Option<String> = self
+            .conn
+            .query_row("SELECT v FROM settings WHERE k = ?", [key], |row| row.get(0))
+            .optional()?;
+        Ok(value)
+    }
+
+    fn save_setting(&self, key: &str, value: Option<&str>) -> Result<(), PersistError> {
+        match value {
+            Some(v) => {
+                self.conn.execute(
+                    "INSERT INTO settings (k, v) VALUES (?, ?) \
+                     ON CONFLICT(k) DO UPDATE SET v = excluded.v",
+                    params![key, v],
+                )?;
+            }
+            None => {
+                self.conn.execute("DELETE FROM settings WHERE k = ?", [key])?;
+            }
+        }
+        Ok(())
     }
 
     // ---- Messages ----

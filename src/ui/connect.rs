@@ -1,11 +1,10 @@
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use eframe::egui;
 use tokio::sync::mpsc;
 
 use crate::domain::ids::BleAddress;
 use crate::domain::profile::{ConnectionProfile, TransportKind};
-use crate::persist::profiles::save_to;
 use crate::session::commands::Command;
 use crate::ui::AppState;
 
@@ -25,12 +24,7 @@ pub struct AddForm {
     pub address: String,
 }
 
-pub fn render(
-    ui: &mut egui::Ui,
-    state: &mut AppState,
-    cmd: &mpsc::UnboundedSender<Command>,
-    profiles_path: &Path,
-) {
+pub fn render(ui: &mut egui::Ui, state: &mut AppState, cmd: &mpsc::UnboundedSender<Command>) {
     ui.heading("Meshtastic");
     let busy = matches!(state.status, crate::ui::SessionStatus::Connecting);
     if busy {
@@ -53,9 +47,9 @@ pub fn render(
         }
     });
     ui.separator();
-    list_profiles(ui, state, cmd, profiles_path, busy);
+    list_profiles(ui, state, cmd, busy);
     if state.connect_ui.add.open {
-        add_dialog(ui.ctx(), state, profiles_path);
+        add_dialog(ui.ctx(), state);
     }
 }
 
@@ -63,7 +57,6 @@ fn list_profiles(
     ui: &mut egui::Ui,
     state: &mut AppState,
     cmd: &mpsc::UnboundedSender<Command>,
-    profiles_path: &Path,
     busy: bool,
 ) {
     let mut delete_idx: Option<usize> = None;
@@ -84,13 +77,11 @@ fn list_profiles(
         && i < state.profiles.len()
     {
         let _ = state.profiles.remove(i);
-        if let Err(e) = save_to(profiles_path, &state.profiles, state.reconnect.last_active.as_deref()) {
-            state.last_error = Some(e.to_string());
-        }
+        state.profiles_dirty = true;
     }
 }
 
-fn add_dialog(ctx: &egui::Context, state: &mut AppState, profiles_path: &Path) {
+fn add_dialog(ctx: &egui::Context, state: &mut AppState) {
     let mut close = false;
     let mut save = false;
     egui::Window::new("Add profile").collapsible(false).show(ctx, |ui| {
@@ -146,13 +137,7 @@ fn add_dialog(ctx: &egui::Context, state: &mut AppState, profiles_path: &Path) {
     if save
         && let Some(profile) = build_profile(&state.connect_ui.add) {
             state.profiles.push(profile);
-            if let Err(e) = save_to(
-                profiles_path,
-                &state.profiles,
-                state.reconnect.last_active.as_deref(),
-            ) {
-                state.last_error = Some(e.to_string());
-            }
+            state.profiles_dirty = true;
             close = true;
         }
     if close {
