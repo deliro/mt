@@ -29,9 +29,7 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState, cmd: &mpsc::UnboundedSend
     let busy = matches!(state.status, crate::ui::SessionStatus::Connecting);
     if busy {
         ui.horizontal(|ui| {
-            ui.spinner();
-            ui.label("Connecting…");
-            if ui.button("Cancel").clicked() {
+            if ui.button("Cancel current attempt").clicked() {
                 state.reconnect.mark_user_disconnect();
                 let _ = cmd.send(Command::Disconnect);
             }
