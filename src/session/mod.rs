@@ -301,8 +301,10 @@ async fn run_ready_loop(
     let mut heartbeat = interval(HEARTBEAT_INTERVAL);
     heartbeat.set_missed_tick_behavior(MissedTickBehavior::Delay);
     let _ = heartbeat.tick().await;
-    let mut pending: std::collections::HashSet<PacketId> =
-        std::collections::HashSet::default();
+    let mut pending: std::collections::HashMap<
+        PacketId,
+        tokio::sync::oneshot::Sender<()>,
+    > = std::collections::HashMap::default();
 
     loop {
         let step = tokio::select! {
@@ -343,7 +345,7 @@ async fn handle_command(
     my_node: NodeId,
     sink: &mut Pin<Box<impl futures::Sink<Vec<u8>, Error = crate::transport::TransportError> + ?Sized>>,
     tx: &mpsc::Sender<Event>,
-    pending: &mut std::collections::HashSet<PacketId>,
+    pending: &mut std::collections::HashMap<PacketId, tokio::sync::oneshot::Sender<()>>,
 ) -> LoopStep {
     match cmd {
         Command::Connect(_) => {
@@ -356,7 +358,7 @@ async fn handle_command(
             handle_send_text(sink, my_node, tx, pending, req).await
         }
         Command::AckTimeout(id) => {
-            if pending.remove(&id) {
+            if pending.remove(&id).is_some() {
                 let _ = tx
                     .send(Event::MessageStateChanged {
                         id,
@@ -381,14 +383,21 @@ async fn handle_send_text(
     sink: &mut Pin<Box<impl futures::Sink<Vec<u8>, Error = crate::transport::TransportError> + ?Sized>>,
     my_node: NodeId,
     tx: &mpsc::Sender<Event>,
-    pending: &mut std::collections::HashSet<PacketId>,
+    pending: &mut std::collections::HashMap<PacketId, tokio::sync::oneshot::Sender<()>>,
     req: SendTextRequest,
 ) -> LoopStep {
     let is_dm = matches!(req.to, Recipient::Node(_));
     let on_wire_want_ack = req.want_ack && is_dm;
     match send_text(sink, req.channel, req.to, &req.text, on_wire_want_ack).await {
         Ok(id) => {
-            let _ = pending.insert(id);
+            let cancel = if is_dm {
+                Some(spawn_ack_timeout(tx.clone(), id))
+            } else {
+                None
+            };
+            if let Some(cancel) = cancel {
+                let _ = pending.insert(id, cancel);
+            }
             let _ = tx
                 .send(Event::MessageReceived(TextMessage {
                     id,
@@ -401,9 +410,6 @@ async fn handle_send_text(
                     state: DeliveryState::Queued,
                 }))
                 .await;
-            if is_dm {
-                spawn_ack_timeout(tx.clone(), id);
-            }
             LoopStep::Continue
         }
         Err(e) => LoopStep::Error(e.to_string()),
@@ -727,7 +733,7 @@ async fn handle_incoming(
     item: Option<Result<Vec<u8>, crate::transport::TransportError>>,
     my_node: NodeId,
     tx: &mpsc::Sender<Event>,
-    pending: &mut std::collections::HashSet<PacketId>,
+    pending: &mut std::collections::HashMap<PacketId, tokio::sync::oneshot::Sender<()>>,
 ) -> LoopStep {
     let Some(item) = item else { return LoopStep::Disconnect };
     let frame = match item {
@@ -747,14 +753,15 @@ async fn handle_incoming(
                 let _ = tx.send(ev).await;
             }
             IncomingOutcome::QueueOk(id) => {
-                if pending.contains(&id) {
+                if pending.contains_key(&id) {
                     let _ = tx
                         .send(Event::MessageStateChanged { id, state: DeliveryState::Sent })
                         .await;
                 }
             }
             IncomingOutcome::Ack { id, state } => {
-                if pending.remove(&id) {
+                if let Some(cancel) = pending.remove(&id) {
+                    let _ = cancel.send(());
                     let _ = tx.send(Event::MessageStateChanged { id, state }).await;
                 }
             }
@@ -831,16 +838,25 @@ async fn send_heartbeat(
     Ok(())
 }
 
-fn spawn_ack_timeout(tx: mpsc::Sender<Event>, id: PacketId) {
+fn spawn_ack_timeout(
+    tx: mpsc::Sender<Event>,
+    id: PacketId,
+) -> tokio::sync::oneshot::Sender<()> {
+    let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel();
     tokio::spawn(async move {
-        sleep(ACK_TIMEOUT).await;
-        let _ = tx
-            .send(Event::MessageStateChanged {
-                id,
-                state: DeliveryState::Failed("no ack".into()),
-            })
-            .await;
+        tokio::select! {
+            () = sleep(ACK_TIMEOUT) => {
+                let _ = tx
+                    .send(Event::MessageStateChanged {
+                        id,
+                        state: DeliveryState::Failed("no ack".into()),
+                    })
+                    .await;
+            }
+            _ = cancel_rx => {}
+        }
     });
+    cancel_tx
 }
 
 async fn emit_error_and_disconnect(tx: &mpsc::Sender<Event>, msg: &str) {

@@ -206,10 +206,22 @@ impl App {
         id: crate::domain::ids::PacketId,
         state: &crate::domain::message::DeliveryState,
     ) {
-        if let Some(m) = self.state.snapshot.messages.iter_mut().find(|m| m.id == id) {
-            m.state = state.clone();
-        }
-        if let Some(store) = &self.store
+        let applied = self
+            .state
+            .snapshot
+            .messages
+            .iter_mut()
+            .find(|m| m.id == id)
+            .is_some_and(|m| {
+                if m.state.is_terminal() {
+                    false
+                } else {
+                    m.state = state.clone();
+                    true
+                }
+            });
+        if applied
+            && let Some(store) = &self.store
             && let Err(e) = store.update_message_state(self.state.snapshot.my_node, id, state)
         {
             warn!(%e, "persist state change failed");
@@ -323,12 +335,7 @@ impl eframe::App for App {
                 }
             }
         }
-        details::render_overlay(
-            ctx,
-            &self.state.snapshot,
-            &mut self.state.detail_node,
-            &self.cmd_tx,
-        );
+        details::render_overlay(ctx, &mut self.state, &self.cmd_tx);
         ctx.request_repaint_after(std::time::Duration::from_millis(100));
     }
 }

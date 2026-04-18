@@ -5,43 +5,65 @@ use tokio::sync::mpsc;
 
 use crate::domain::ids::NodeId;
 use crate::domain::node::Node;
-use crate::domain::snapshot::DeviceSnapshot;
 use crate::session::commands::Command;
+use crate::ui::{AppState, Tab};
 
 pub fn render_overlay(
     ctx: &egui::Context,
-    snapshot: &DeviceSnapshot,
-    detail_node: &mut Option<NodeId>,
+    state: &mut AppState,
     cmd: &mpsc::UnboundedSender<Command>,
 ) {
-    let Some(id) = *detail_node else { return };
-    let mut open = true;
-    let title = snapshot
+    let Some(id) = state.detail_node else { return };
+    let is_self = id == state.snapshot.my_node;
+    let title = state
+        .snapshot
         .nodes
         .get(&id)
         .map_or_else(|| format!("!{:08x}", id.0), display_name);
-    let is_self = id == snapshot.my_node;
+
+    let mut open = true;
+    let mut action: Option<Action> = None;
     egui::Window::new(title).open(&mut open).collapsible(false).resizable(false).show(ctx, |ui| {
-        match snapshot.nodes.get(&id) {
+        match state.snapshot.nodes.get(&id) {
             Some(node) => {
                 render_body(ui, node);
-                if !is_self {
-                    ui.separator();
-                    render_actions(ui, node, cmd);
-                }
+                ui.separator();
+                action = render_actions(ui, node, is_self);
             }
             None => {
                 ui.label(format!("No data yet for !{:08x}", id.0));
             }
         }
     });
+
+    if let Some(action) = action {
+        apply_action(state, cmd, id, action);
+    }
     if !open {
-        *detail_node = None;
+        state.detail_node = None;
     }
 }
 
-fn render_actions(ui: &mut egui::Ui, node: &Node, cmd: &mpsc::UnboundedSender<Command>) {
+#[derive(Copy, Clone)]
+enum Action {
+    ToggleFavorite,
+    ToggleIgnored,
+    SendMessage,
+}
+
+fn render_actions(ui: &mut egui::Ui, node: &Node, is_self: bool) -> Option<Action> {
+    let mut action = None;
     ui.horizontal(|ui| {
+        if ui
+            .button("Send message")
+            .on_hover_text("Open the Chat tab with this node selected as DM target.")
+            .clicked()
+        {
+            action = Some(Action::SendMessage);
+        }
+        if is_self {
+            return;
+        }
         let fav_label = if node.is_favorite { "★ Unfavorite" } else { "☆ Favorite" };
         if ui
             .button(fav_label)
@@ -50,7 +72,7 @@ fn render_actions(ui: &mut egui::Ui, node: &Node, cmd: &mpsc::UnboundedSender<Co
             )
             .clicked()
         {
-            let _ = cmd.send(Command::SetFavorite { node: node.id, favorite: !node.is_favorite });
+            action = Some(Action::ToggleFavorite);
         }
         let ign_label = if node.is_ignored { "Unignore" } else { "Ignore" };
         let ign_btn = if node.is_ignored {
@@ -66,9 +88,39 @@ fn render_actions(ui: &mut egui::Ui, node: &Node, cmd: &mpsc::UnboundedSender<Co
             )
             .clicked()
         {
-            let _ = cmd.send(Command::SetIgnored { node: node.id, ignored: !node.is_ignored });
+            action = Some(Action::ToggleIgnored);
         }
     });
+    action
+}
+
+fn apply_action(
+    state: &mut AppState,
+    cmd: &mpsc::UnboundedSender<Command>,
+    id: NodeId,
+    action: Action,
+) {
+    match action {
+        Action::ToggleFavorite => {
+            if let Some(node) = state.snapshot.nodes.get_mut(&id) {
+                node.is_favorite = !node.is_favorite;
+                let _ = cmd
+                    .send(Command::SetFavorite { node: id, favorite: node.is_favorite });
+            }
+        }
+        Action::ToggleIgnored => {
+            if let Some(node) = state.snapshot.nodes.get_mut(&id) {
+                node.is_ignored = !node.is_ignored;
+                let _ =
+                    cmd.send(Command::SetIgnored { node: id, ignored: node.is_ignored });
+            }
+        }
+        Action::SendMessage => {
+            state.chat_ui.dm_target = Some(id);
+            state.active_tab = Tab::Chat;
+            state.detail_node = None;
+        }
+    }
 }
 
 fn render_body(ui: &mut egui::Ui, node: &Node) {
@@ -90,28 +142,19 @@ fn render_body(ui: &mut egui::Ui, node: &Node) {
             }
             let flags_label = if flags.is_empty() { "—".to_owned() } else { flags.join(", ") };
             row(ui, "Flags", flags_label);
-            row(ui, "Battery", node.battery_level.map_or_else(|| "—".to_owned(), |b| format!("{b}%")));
-            row(ui, "Voltage", node.voltage_v.map_or_else(|| "—".to_owned(), |v| format!("{v:.2} V")));
-            row(ui, "SNR", node.snr_db.map_or_else(|| "—".to_owned(), |s| format!("{s:.1} dB")));
-            row(ui, "RSSI", node.rssi_dbm.map_or_else(|| "—".to_owned(), |r| format!("{r} dBm")));
-            row(ui, "Hops away", node.hops_away.map_or_else(|| "—".to_owned(), |h| h.to_string()));
+            row(ui, "Battery", node.battery_level.map_or_else(|| "—".into(), |b| format!("{b}%")));
+            row(ui, "Voltage", node.voltage_v.map_or_else(|| "—".into(), |v| format!("{v:.2} V")));
+            row(ui, "SNR", node.snr_db.map_or_else(|| "—".into(), |s| format!("{s:.1} dB")));
+            row(ui, "RSSI", node.rssi_dbm.map_or_else(|| "—".into(), |r| format!("{r} dBm")));
+            row(ui, "Hops away", node.hops_away.map_or_else(|| "—".into(), |h| h.to_string()));
             row(ui, "Last heard", format_last_heard(node.last_heard));
             if let Some(pos) = &node.position {
-                row(
-                    ui,
-                    "Latitude",
-                    format!("{:.6}°", pos.latitude_deg),
-                );
-                row(
-                    ui,
-                    "Longitude",
-                    format!("{:.6}°", pos.longitude_deg),
-                );
+                row(ui, "Latitude", format!("{:.6}°", pos.latitude_deg));
+                row(ui, "Longitude", format!("{:.6}°", pos.longitude_deg));
                 row(
                     ui,
                     "Altitude",
-                    pos.altitude_m
-                        .map_or_else(|| "—".to_owned(), |a| format!("{a} m")),
+                    pos.altitude_m.map_or_else(|| "—".to_owned(), |a| format!("{a} m")),
                 );
             } else {
                 row(ui, "Position", "—".to_owned());
@@ -140,8 +183,8 @@ fn non_empty_or(s: &str, fallback: &str) -> String {
 }
 
 fn format_last_heard(last_heard: Option<SystemTime>) -> String {
-    let Some(t) = last_heard else { return "—".to_owned() };
-    let Ok(d) = SystemTime::now().duration_since(t) else { return "—".to_owned() };
+    let Some(t) = last_heard else { return "—".into() };
+    let Ok(d) = SystemTime::now().duration_since(t) else { return "—".into() };
     let secs = d.as_secs();
     if secs < 60 {
         format!("{secs}s ago")
