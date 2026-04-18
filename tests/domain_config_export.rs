@@ -8,7 +8,7 @@ use mt::domain::config::{
     NeighborInfoSettings, NetworkSettings, PositionSettings, PowerSettings, RangeTestSettings,
     SecuritySettings, StoreForwardSettings, TelemetrySettings,
 };
-use mt::domain::config_export::{self, ConfigExport, Owner, EXPORT_VERSION};
+use mt::domain::config_export::{self, ConfigExport, Owner};
 use mt::domain::ids::{ChannelIndex, NodeId};
 use mt::domain::node::{Node, NodeRole, Position};
 use mt::domain::snapshot::DeviceSnapshot;
@@ -64,7 +64,6 @@ fn encode_decode_preserves_every_populated_section() {
     };
 
     let export = config_export::export_snapshot(&snap);
-    assert_eq!(export.version, EXPORT_VERSION);
     let json = config_export::encode(&export);
     assert!(json.contains("\"long_name\": \"Roman\""));
 
@@ -138,16 +137,6 @@ fn snapshot_with_my_node(id: NodeId, lat: f64, lon: f64, alt: Option<i32>) -> De
     let mut nodes = HashMap::new();
     nodes.insert(id, me);
     DeviceSnapshot { my_node: id, nodes, ..DeviceSnapshot::default() }
-}
-
-#[test]
-fn decode_rejects_wrong_version() {
-    let snap = DeviceSnapshot::default();
-    let mut export = config_export::export_snapshot(&snap);
-    export.version = 99;
-    let json = config_export::encode(&export);
-    let err = config_export::decode(&json).unwrap_err();
-    assert!(format!("{err}").contains("unsupported export version 99"));
 }
 
 #[test]

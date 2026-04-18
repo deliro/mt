@@ -10,8 +10,6 @@ use crate::domain::config::{
 };
 use crate::domain::snapshot::DeviceSnapshot;
 
-pub const EXPORT_VERSION: u32 = 2;
-
 /// Human-editable JSON document capturing every configuration surface the UI
 /// can write back to the device.
 ///
@@ -22,7 +20,6 @@ pub const EXPORT_VERSION: u32 = 2;
 /// IS exported so an admin can clone "who may manage me" across a fleet.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ConfigExport {
-    pub version: u32,
     pub owner: Owner,
     pub lora: Option<LoraSettings>,
     pub device: Option<DeviceSettings>,
@@ -73,13 +70,10 @@ pub struct SecurityPolicy {
 pub enum ImportError {
     #[error("not a valid config export: {0}")]
     Parse(#[from] serde_json::Error),
-    #[error("unsupported export version {found}; this build understands v{}", EXPORT_VERSION)]
-    Version { found: u32 },
 }
 
 pub fn export_snapshot(snapshot: &DeviceSnapshot) -> ConfigExport {
     ConfigExport {
-        version: EXPORT_VERSION,
         owner: Owner {
             long_name: snapshot.long_name.clone(),
             short_name: snapshot.short_name.clone(),
@@ -132,9 +126,5 @@ pub fn encode(export: &ConfigExport) -> String {
 }
 
 pub fn decode(src: &str) -> Result<ConfigExport, ImportError> {
-    let parsed: ConfigExport = serde_json::from_str(src)?;
-    if parsed.version != EXPORT_VERSION {
-        return Err(ImportError::Version { found: parsed.version });
-    }
-    Ok(parsed)
+    Ok(serde_json::from_str(src)?)
 }

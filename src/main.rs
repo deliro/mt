@@ -6,7 +6,6 @@ use eframe::NativeOptions;
 use futures::FutureExt;
 use mt::domain::profile::{ConnectionProfile, TransportKind};
 use mt::persist::history::{HistoryStore, default_path as history_path};
-use mt::persist::profiles::{default_path as legacy_profiles_path, load_from as load_legacy_profiles};
 use mt::session::commands::Command;
 use mt::session::{DeviceSession, Event};
 use mt::transport::{BoxedTransport, ble, serial, tcp};
@@ -31,7 +30,8 @@ fn main() -> eframe::Result<()> {
         }
     };
 
-    let (profiles, last_active_key) = load_profiles_and_migrate(store.as_ref());
+    let profiles = store.as_ref().and_then(|s| s.load_profiles().ok()).unwrap_or_default();
+    let last_active_key = store.as_ref().and_then(|s| s.load_last_active().ok()).flatten();
 
     let runtime = match tokio::runtime::Builder::new_multi_thread().enable_all().build() {
         Ok(rt) => Arc::new(rt),
@@ -79,36 +79,3 @@ fn main() -> eframe::Result<()> {
     )
 }
 
-/// Load the profile list and last-active key from the `SQLite` store,
-/// migrating from the legacy `profiles.toml` file on first run. The TOML
-/// file is renamed to `profiles.toml.migrated` after a successful import
-/// so the user can see where their old data went.
-fn load_profiles_and_migrate(store: Option<&HistoryStore>) -> (Vec<ConnectionProfile>, Option<String>) {
-    let Some(store) = store else {
-        // Fall back to the legacy file if we couldn't open the DB at all.
-        let stored = load_legacy_profiles(&legacy_profiles_path()).unwrap_or_default();
-        return (stored.profiles, stored.last_active);
-    };
-    let mut profiles = store.load_profiles().unwrap_or_default();
-    let mut last_active = store.load_last_active().unwrap_or_default();
-    if profiles.is_empty() && last_active.is_none() {
-        let legacy_path = legacy_profiles_path();
-        if let Ok(stored) = load_legacy_profiles(&legacy_path)
-            && (!stored.profiles.is_empty() || stored.last_active.is_some())
-        {
-            if let Err(e) = store.save_profiles(&stored.profiles) {
-                tracing::warn!(%e, "migrating legacy profiles into sqlite failed");
-            } else if let Err(e) = store.save_last_active(stored.last_active.as_deref()) {
-                tracing::warn!(%e, "migrating last_active into sqlite failed");
-            } else {
-                profiles = stored.profiles;
-                last_active = stored.last_active;
-                let backup = legacy_path.with_extension("toml.migrated");
-                if let Err(e) = std::fs::rename(&legacy_path, &backup) {
-                    tracing::warn!(%e, ?backup, "renaming legacy profiles.toml failed");
-                }
-            }
-        }
-    }
-    (profiles, last_active)
-}

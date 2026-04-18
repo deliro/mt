@@ -141,10 +141,8 @@ A bad release:
 3. Land the fix on `master` with a `fix:` commit; release-please opens a
    patch PR; merge; done.
 
-## Data migrations
+## Data format
 
-If you change `profiles.toml` or the SQLite schema, bump minor and document
-the migration in the release notes. The SQLite migrator in
-`src/persist/history.rs` handles additive column changes via `PRAGMA
-table_info` + `ALTER TABLE`; anything destructive needs explicit code and a
-release note.
+The app is pre-distribution, so schema changes are handled by nuking the
+SQLite file when necessary. Once the app ships, any breaking schema change
+must come with an explicit migration — add it to `HistoryStore::open`.

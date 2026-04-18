@@ -62,14 +62,11 @@ impl HistoryStore {
                 saved_at_ms   INTEGER NOT NULL,
                 is_favorite   INTEGER NOT NULL DEFAULT 0,
                 is_ignored    INTEGER NOT NULL DEFAULT 0,
+                public_key    BLOB    NOT NULL DEFAULT x'',
                 PRIMARY KEY (my_node, node_id)
-            );",
-        )?;
-        add_column_if_missing(&conn, "nodes", "is_favorite", "INTEGER NOT NULL DEFAULT 0")?;
-        add_column_if_missing(&conn, "nodes", "is_ignored", "INTEGER NOT NULL DEFAULT 0")?;
-        add_column_if_missing(&conn, "nodes", "public_key", "BLOB NOT NULL DEFAULT x''")?;
-        conn.execute_batch(
-            "CREATE TABLE IF NOT EXISTS settings (
+            );
+
+            CREATE TABLE IF NOT EXISTS settings (
                 k TEXT PRIMARY KEY,
                 v TEXT NOT NULL
             );",
@@ -334,24 +331,6 @@ impl HistoryStore {
         let rows = self.conn.execute("DELETE FROM nodes WHERE my_node = ?", [my_node.0])?;
         Ok(rows)
     }
-}
-
-fn add_column_if_missing(
-    conn: &Connection,
-    table: &str,
-    column: &str,
-    spec: &str,
-) -> Result<(), PersistError> {
-    let mut stmt = conn.prepare(&format!("PRAGMA table_info({table})"))?;
-    let exists: bool = stmt
-        .query_map([], |row| row.get::<_, String>(1))?
-        .filter_map(Result::ok)
-        .any(|name| name == column);
-    drop(stmt);
-    if !exists {
-        conn.execute(&format!("ALTER TABLE {table} ADD COLUMN {column} {spec}"), [])?;
-    }
-    Ok(())
 }
 
 pub fn default_path() -> PathBuf {

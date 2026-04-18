@@ -51,10 +51,6 @@ pub enum PairingHint {
 pub enum PersistError {
     #[error("io: {0}")]
     Io(#[from] std::io::Error),
-    #[error("parse: {0}")]
-    Parse(#[from] toml::de::Error),
-    #[error("serialize: {0}")]
-    Serialize(#[from] toml::ser::Error),
     #[error("sqlite: {0}")]
     Sqlite(#[from] rusqlite::Error),
     #[error("json: {0}")]
