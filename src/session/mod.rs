@@ -35,6 +35,7 @@ pub enum Event {
     Connected(Box<DeviceSnapshot>),
     NodeUpdated(Node),
     ChannelUpdated(Channel),
+    LoraUpdated(crate::domain::config::LoraSettings),
     MessageReceived(TextMessage),
     MessageStateChanged { id: PacketId, state: DeliveryState },
     Disconnected,
@@ -301,7 +302,9 @@ async fn handle_command(
         }
         Command::Disconnect => LoopStep::Disconnect,
         Command::SendText { channel, to, text, want_ack } => {
-            match send_text(sink, channel, to, &text, want_ack).await {
+            let is_dm = matches!(to, Recipient::Node(_));
+            let on_wire_want_ack = want_ack && is_dm;
+            match send_text(sink, channel, to, &text, on_wire_want_ack).await {
                 Ok(id) => {
                     let _ = pending.insert(id);
                     let _ = tx
@@ -316,7 +319,9 @@ async fn handle_command(
                             state: DeliveryState::Queued,
                         }))
                         .await;
-                    spawn_ack_timeout(tx.clone(), id);
+                    if is_dm {
+                        spawn_ack_timeout(tx.clone(), id);
+                    }
                     LoopStep::Continue
                 }
                 Err(e) => LoopStep::Error(e.to_string()),
@@ -557,6 +562,7 @@ fn incoming_outcomes(msg: meshtastic::FromRadio) -> Vec<IncomingOutcome> {
             .into_iter()
             .map(IncomingOutcome::Event)
             .collect(),
+        PayloadVariant::Config(cfg) => config_to_events(cfg),
         PayloadVariant::QueueStatus(qs) if qs.res == 0 => {
             vec![IncomingOutcome::QueueOk(PacketId(qs.mesh_packet_id))]
         }
@@ -565,7 +571,6 @@ fn incoming_outcomes(msg: meshtastic::FromRadio) -> Vec<IncomingOutcome> {
             state: DeliveryState::Failed(format!("device queue rejected ({})", qs.res)),
         }],
         PayloadVariant::MyInfo(_)
-        | PayloadVariant::Config(_)
         | PayloadVariant::ModuleConfig(_)
         | PayloadVariant::ConfigCompleteId(_)
         | PayloadVariant::Rebooted(_)
@@ -576,6 +581,36 @@ fn incoming_outcomes(msg: meshtastic::FromRadio) -> Vec<IncomingOutcome> {
         | PayloadVariant::MqttClientProxyMessage(_)
         | PayloadVariant::ClientNotification(_)
         | PayloadVariant::DeviceuiConfig(_) => Vec::new(),
+    }
+}
+
+fn config_to_events(cfg: meshtastic::Config) -> Vec<IncomingOutcome> {
+    use meshtastic::config::PayloadVariant;
+    let Some(variant) = cfg.payload_variant else { return Vec::new() };
+    match variant {
+        PayloadVariant::Lora(lora) => {
+            vec![IncomingOutcome::Event(Event::LoraUpdated(lora_from_proto(&lora)))]
+        }
+        PayloadVariant::Device(_)
+        | PayloadVariant::Position(_)
+        | PayloadVariant::Power(_)
+        | PayloadVariant::Network(_)
+        | PayloadVariant::Display(_)
+        | PayloadVariant::Bluetooth(_)
+        | PayloadVariant::Security(_)
+        | PayloadVariant::Sessionkey(_)
+        | PayloadVariant::DeviceUi(_) => Vec::new(),
+    }
+}
+
+fn lora_from_proto(lora: &meshtastic::config::LoRaConfig) -> crate::domain::config::LoraSettings {
+    crate::domain::config::LoraSettings {
+        region: lora.region(),
+        modem_preset: lora.modem_preset(),
+        use_preset: lora.use_preset,
+        hop_limit: lora.hop_limit.min(7) as u8,
+        tx_enabled: lora.tx_enabled,
+        tx_power: lora.tx_power,
     }
 }
 

@@ -62,7 +62,7 @@ pub fn render(ui: &mut egui::Ui, snapshot: &DeviceSnapshot, nodes_ui: &mut Nodes
                 }
             }
         }
-        ui.label(if nodes_ui.ascending { "▲" } else { "▼" });
+        ui.label(if nodes_ui.ascending { "asc" } else { "desc" });
     });
     ui.separator();
 

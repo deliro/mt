@@ -99,7 +99,7 @@ fn message_list(ui: &mut egui::Ui, state: &AppState, active: ChannelIndex) {
                 }
                 if let Recipient::Node(target) = m.to {
                     let label = node_display_name(state, target);
-                    ui.label(format!("→ {label}"));
+                    ui.label(format!("-> {label}"));
                 }
                 ui.label(&m.text);
                 if m.direction == Direction::Outgoing {
@@ -166,17 +166,17 @@ fn composer(
 fn render_delivery(ui: &mut egui::Ui, state: &DeliveryState) {
     match state {
         DeliveryState::Queued => {
-            ui.weak("⏳").on_hover_text("queued on phone");
+            ui.weak("queued").on_hover_text("queued on phone");
         }
         DeliveryState::Sent => {
-            ui.weak("✓").on_hover_text("sent to device");
+            ui.weak("sent").on_hover_text("accepted by device");
         }
         DeliveryState::Acked => {
-            ui.colored_label(egui::Color32::LIGHT_GREEN, "✓✓").on_hover_text("acknowledged");
+            ui.colored_label(egui::Color32::LIGHT_GREEN, "acked")
+                .on_hover_text("acknowledged by mesh");
         }
         DeliveryState::Failed(reason) => {
-            ui.colored_label(egui::Color32::LIGHT_RED, "⚠")
-                .on_hover_text(format!("failed: {reason}"));
+            ui.colored_label(egui::Color32::LIGHT_RED, format!("failed: {reason}"));
         }
     }
 }

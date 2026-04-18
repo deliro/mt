@@ -6,14 +6,14 @@ pub fn render(ui: &mut egui::Ui, state: &AppState) {
     ui.horizontal(|ui| {
         match &state.status {
             SessionStatus::Disconnected => {
-                ui.label("○ Disconnected");
+                ui.colored_label(egui::Color32::GRAY, "Disconnected");
             }
             SessionStatus::Connecting => {
                 ui.spinner();
-                ui.colored_label(egui::Color32::YELLOW, "Connecting…");
+                ui.colored_label(egui::Color32::YELLOW, "Connecting...");
             }
             SessionStatus::Connected => {
-                ui.colored_label(egui::Color32::LIGHT_GREEN, "● Connected");
+                ui.colored_label(egui::Color32::LIGHT_GREEN, "Connected");
                 ui.separator();
                 ui.label(format!("{} [{}]", state.snapshot.long_name, state.snapshot.short_name));
                 if !state.snapshot.firmware_version.is_empty() {

@@ -103,6 +103,9 @@ impl App {
             Event::ChannelUpdated(ch) => {
                 self.state.snapshot.upsert_channel(ch);
             }
+            Event::LoraUpdated(lora) => {
+                self.state.snapshot.lora = Some(lora);
+            }
             Event::MessageReceived(m) => {
                 self.state.snapshot.messages.push(m);
             }
