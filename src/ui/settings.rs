@@ -1559,7 +1559,7 @@ fn backup_section(
     if let Some(msg) = s.backup_last_action.as_ref() {
         ui.colored_label(egui::Color32::LIGHT_GREEN, msg);
     }
-    backup_import_modal(ui.ctx(), s, cmd);
+    backup_import_modal(ui.ctx(), snapshot, s, cmd);
     if s.dirty.is(Section::Backup) {
         s.dirty.clear(Section::Backup);
     }
@@ -1567,6 +1567,7 @@ fn backup_section(
 
 fn backup_import_modal(
     ctx: &egui::Context,
+    snapshot: &DeviceSnapshot,
     s: &mut SettingsUi,
     cmd: &mpsc::UnboundedSender<Command>,
 ) {
@@ -1614,14 +1615,18 @@ fn backup_import_modal(
         });
     s.backup_import_open = open && !apply;
     if apply {
-        apply_import(s, cmd);
+        apply_import(snapshot, s, cmd);
     }
 }
 
-fn apply_import(s: &mut SettingsUi, cmd: &mpsc::UnboundedSender<Command>) {
+fn apply_import(
+    snapshot: &DeviceSnapshot,
+    s: &mut SettingsUi,
+    cmd: &mpsc::UnboundedSender<Command>,
+) {
     match crate::domain::config_export::decode(&s.backup_import_text) {
         Ok(export) => {
-            dispatch_import(&export, cmd);
+            dispatch_import(snapshot, &export, cmd);
             s.backup_import_open = false;
             s.backup_import_text.clear();
             s.backup_import_error = None;
@@ -1634,6 +1639,7 @@ fn apply_import(s: &mut SettingsUi, cmd: &mpsc::UnboundedSender<Command>) {
 }
 
 fn dispatch_import(
+    snapshot: &DeviceSnapshot,
     export: &crate::domain::config_export::ConfigExport,
     cmd: &mpsc::UnboundedSender<Command>,
 ) {
@@ -1643,6 +1649,19 @@ fn dispatch_import(
             short_name: export.owner.short_name.clone(),
         });
     }
+    dispatch_core_import(export, cmd);
+    dispatch_security_import(snapshot, export, cmd);
+    dispatch_module_import(export, cmd);
+    dispatch_fixed_position_import(export, cmd);
+    for channel in &export.channels {
+        let _ = cmd.send(Command::SetChannel(channel.clone()));
+    }
+}
+
+fn dispatch_core_import(
+    export: &crate::domain::config_export::ConfigExport,
+    cmd: &mpsc::UnboundedSender<Command>,
+) {
     if let Some(v) = export.lora.clone() {
         let _ = cmd.send(Command::SetLora(v));
     }
@@ -1664,6 +1683,37 @@ fn dispatch_import(
     if let Some(v) = export.bluetooth.clone() {
         let _ = cmd.send(Command::SetBluetooth(v));
     }
+}
+
+fn dispatch_security_import(
+    snapshot: &DeviceSnapshot,
+    export: &crate::domain::config_export::ConfigExport,
+    cmd: &mpsc::UnboundedSender<Command>,
+) {
+    let Some(policy) = export.security_policy.as_ref() else { return };
+    // Preserve the device's own keypair — the export never carried it, and
+    // SetConfig(Security) with an empty keypair would wipe it on the target.
+    let (public_key, private_key) = snapshot
+        .security
+        .as_ref()
+        .map_or_else(
+            || (Vec::new(), Vec::new()),
+            |s| (s.public_key.clone(), s.private_key.clone()),
+        );
+    let _ = cmd.send(Command::SetSecurity(crate::domain::config::SecuritySettings {
+        public_key,
+        private_key,
+        admin_keys: policy.admin_keys.clone(),
+        is_managed: policy.is_managed,
+        admin_channel_enabled: policy.admin_channel_enabled,
+        console: policy.console.clone(),
+    }));
+}
+
+fn dispatch_module_import(
+    export: &crate::domain::config_export::ConfigExport,
+    cmd: &mpsc::UnboundedSender<Command>,
+) {
     if let Some(v) = export.mqtt.clone() {
         let _ = cmd.send(Command::SetMqtt(v));
     }
@@ -1685,9 +1735,18 @@ fn dispatch_import(
     if let Some(v) = export.range_test.clone() {
         let _ = cmd.send(Command::SetRangeTest(v));
     }
-    for channel in &export.channels {
-        let _ = cmd.send(Command::SetChannel(channel.clone()));
-    }
+}
+
+fn dispatch_fixed_position_import(
+    export: &crate::domain::config_export::ConfigExport,
+    cmd: &mpsc::UnboundedSender<Command>,
+) {
+    let Some(fp) = export.fixed_position.as_ref() else { return };
+    let _ = cmd.send(Command::SetFixedPosition {
+        latitude_deg: fp.latitude_deg,
+        longitude_deg: fp.longitude_deg,
+        altitude_m: fp.altitude_m,
+    });
 }
 
 // ---- Commit helper ----
