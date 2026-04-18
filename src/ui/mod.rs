@@ -146,8 +146,14 @@ impl eframe::App for App {
         });
         match self.state.active_tab {
             Tab::Chat => {
+                egui::TopBottomPanel::bottom("chat_composer")
+                    .resizable(false)
+                    .min_height(68.0)
+                    .show(ctx, |ui| {
+                        chat::render_composer(ui, &mut self.state, &self.cmd_tx);
+                    });
                 egui::CentralPanel::default().show(ctx, |ui| {
-                    chat::render(ui, &mut self.state, &self.cmd_tx);
+                    chat::render_messages(ui, &mut self.state);
                 });
             }
             Tab::Nodes => {

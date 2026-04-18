@@ -16,16 +16,24 @@ pub struct ChatUi {
     pub dm_target: Option<NodeId>,
 }
 
-pub fn render(ui: &mut egui::Ui, state: &mut AppState, cmd: &mpsc::UnboundedSender<Command>) {
-    let active = ChannelIndex::new(state.chat_ui.active_channel).unwrap_or_else(ChannelIndex::primary);
-
+pub fn render_messages(ui: &mut egui::Ui, state: &mut AppState) {
     channel_tabs(ui, state);
     ui.separator();
-
+    let active = active_channel(state);
     message_list(ui, state, active);
+}
 
-    ui.separator();
+pub fn render_composer(
+    ui: &mut egui::Ui,
+    state: &mut AppState,
+    cmd: &mpsc::UnboundedSender<Command>,
+) {
+    let active = active_channel(state);
     composer(ui, state, cmd, active);
+}
+
+fn active_channel(state: &AppState) -> ChannelIndex {
+    ChannelIndex::new(state.chat_ui.active_channel).unwrap_or_else(ChannelIndex::primary)
 }
 
 fn channel_tabs(ui: &mut egui::Ui, state: &mut AppState) {
@@ -120,6 +128,7 @@ fn composer(
         nodes
     };
 
+    ui.add_space(4.0);
     ui.horizontal(|ui| {
         ui.label("To:");
         let dm_label = state
@@ -135,6 +144,7 @@ fn composer(
     });
 
     ui.horizontal(|ui| {
+        let can_send = !state.chat_ui.composer_text.trim().is_empty();
         let response = ui.add(
             egui::TextEdit::singleline(&mut state.chat_ui.composer_text)
                 .hint_text("Write a message")
@@ -142,7 +152,6 @@ fn composer(
         );
         let enter_pressed =
             response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-        let can_send = !state.chat_ui.composer_text.trim().is_empty();
         let clicked = ui.add_enabled(can_send, egui::Button::new("Send")).clicked();
         if (clicked || enter_pressed) && can_send {
             let text = std::mem::take(&mut state.chat_ui.composer_text);
@@ -151,6 +160,7 @@ fn composer(
             response.request_focus();
         }
     });
+    ui.add_space(4.0);
 }
 
 fn render_delivery(ui: &mut egui::Ui, state: &DeliveryState) {
