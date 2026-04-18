@@ -5,8 +5,10 @@ use tokio::sync::mpsc;
 
 use crate::domain::ids::NodeId;
 use crate::domain::node::Node;
+use crate::domain::snapshot::DeviceSnapshot;
+use crate::domain::traceroute::TracerouteResult;
 use crate::session::commands::Command;
-use crate::ui::{AppState, Tab};
+use crate::ui::{AppState, Tab, TracerouteUi};
 
 pub fn render_overlay(
     ctx: &egui::Context,
@@ -28,7 +30,8 @@ pub fn render_overlay(
             Some(node) => {
                 render_body(ui, node);
                 ui.separator();
-                action = render_actions(ui, node, is_self);
+                action = render_actions(ui, node, is_self, &state.traceroutes);
+                render_traceroute_section(ui, id, &state.traceroutes, &state.snapshot);
             }
             None => {
                 ui.label(format!("No data yet for !{:08x}", id.0));
@@ -49,9 +52,15 @@ enum Action {
     ToggleFavorite,
     ToggleIgnored,
     SendMessage,
+    Traceroute,
 }
 
-fn render_actions(ui: &mut egui::Ui, node: &Node, is_self: bool) -> Option<Action> {
+fn render_actions(
+    ui: &mut egui::Ui,
+    node: &Node,
+    is_self: bool,
+    tracers: &TracerouteUi,
+) -> Option<Action> {
     let mut action = None;
     ui.horizontal(|ui| {
         if ui
@@ -90,6 +99,19 @@ fn render_actions(ui: &mut egui::Ui, node: &Node, is_self: bool) -> Option<Actio
         {
             action = Some(Action::ToggleIgnored);
         }
+        let pending = tracers.pending.contains(&node.id);
+        let trace_label = if pending { "Tracing…" } else { "Traceroute" };
+        let trace_btn = egui::Button::new(trace_label);
+        if ui
+            .add_enabled(!pending, trace_btn)
+            .on_hover_text(
+                "Probe the path to this node. Each hop's SNR is reported on the reply. May take up \
+                 to a minute.",
+            )
+            .clicked()
+        {
+            action = Some(Action::Traceroute);
+        }
     });
     action
 }
@@ -120,7 +142,78 @@ fn apply_action(
             state.active_tab = Tab::Chat;
             state.detail_node = None;
         }
+        Action::Traceroute => {
+            let _ = state.traceroutes.pending.insert(id);
+            let _ = state.traceroutes.outcomes.remove(&id);
+            let _ = cmd.send(Command::Traceroute { node: id });
+        }
     }
+}
+
+fn render_traceroute_section(
+    ui: &mut egui::Ui,
+    id: NodeId,
+    tracers: &TracerouteUi,
+    snapshot: &DeviceSnapshot,
+) {
+    let pending = tracers.pending.contains(&id);
+    let outcome = tracers.outcomes.get(&id);
+    if !pending && outcome.is_none() {
+        return;
+    }
+    ui.separator();
+    ui.label(egui::RichText::new("Traceroute").strong());
+    if pending {
+        ui.label("Waiting for reply…");
+        return;
+    }
+    match outcome {
+        Some(Ok(result)) => render_traceroute_result(ui, result, snapshot),
+        Some(Err(reason)) => {
+            ui.colored_label(egui::Color32::from_rgb(220, 120, 120), format!("Failed: {reason}"));
+        }
+        None => {}
+    }
+}
+
+fn render_traceroute_result(ui: &mut egui::Ui, r: &TracerouteResult, snap: &DeviceSnapshot) {
+    ui.label(format!(
+        "Completed {}",
+        format_last_heard(Some(r.completed_at)).trim_end_matches(" ago")
+    ));
+    render_hops(ui, "Towards", snap.my_node, r.target, &r.route, &r.snr_towards_db, snap);
+    if !r.route_back.is_empty() || !r.snr_back_db.is_empty() {
+        render_hops(ui, "Back", r.target, snap.my_node, &r.route_back, &r.snr_back_db, snap);
+    }
+}
+
+fn render_hops(
+    ui: &mut egui::Ui,
+    label: &str,
+    start: NodeId,
+    end: NodeId,
+    middle: &[NodeId],
+    snrs: &[f32],
+    snap: &DeviceSnapshot,
+) {
+    ui.label(egui::RichText::new(label).weak());
+    let mut path = Vec::with_capacity(middle.len().saturating_add(2));
+    path.push(start);
+    path.extend_from_slice(middle);
+    path.push(end);
+    for (i, hop) in path.iter().enumerate() {
+        let name = snap.nodes.get(hop).map_or_else(|| format!("!{:08x}", hop.0), display_name);
+        let snr = i.checked_sub(1).and_then(|idx| snrs.get(idx).copied());
+        let line = snr.map_or_else(
+            || format!("  {} {name}", hop_arrow(i)),
+            |v| format!("  {} {name}  ({v:.2} dB)", hop_arrow(i)),
+        );
+        ui.monospace(line);
+    }
+}
+
+const fn hop_arrow(i: usize) -> &'static str {
+    if i == 0 { "•" } else { "→" }
 }
 
 fn render_body(ui: &mut egui::Ui, node: &Node) {

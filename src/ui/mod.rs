@@ -17,6 +17,7 @@ use tracing::warn;
 use crate::domain::ids::NodeId;
 use crate::domain::profile::ConnectionProfile;
 use crate::domain::snapshot::DeviceSnapshot;
+use crate::domain::traceroute::TracerouteResult;
 use crate::persist::history::HistoryStore;
 use crate::session::Event;
 use crate::session::commands::Command;
@@ -43,6 +44,13 @@ pub struct AppState {
     pub chat_ui: chat::ChatUi,
     pub nodes_ui: nodes::NodesUi,
     pub settings_ui: settings::SettingsUi,
+    pub traceroutes: TracerouteUi,
+}
+
+#[derive(Default)]
+pub struct TracerouteUi {
+    pub pending: std::collections::HashSet<NodeId>,
+    pub outcomes: std::collections::HashMap<NodeId, Result<TracerouteResult, String>>,
 }
 
 impl AppState {
@@ -112,6 +120,15 @@ impl App {
             Event::DisplayUpdated(s) => self.state.snapshot.display = Some(s),
             Event::BluetoothUpdated(s) => self.state.snapshot.bluetooth = Some(s),
             Event::StatsUpdated(stats) => self.state.snapshot.stats.merge(&stats),
+            Event::TracerouteResult(result) => {
+                let target = result.target;
+                let _ = self.state.traceroutes.pending.remove(&target);
+                let _ = self.state.traceroutes.outcomes.insert(target, Ok(result));
+            }
+            Event::TracerouteFailed { target, reason } => {
+                let _ = self.state.traceroutes.pending.remove(&target);
+                let _ = self.state.traceroutes.outcomes.insert(target, Err(reason));
+            }
             Event::MessageReceived(m) => self.apply_message_received(m),
             Event::MessageStateChanged { id, state } => self.apply_state_changed(id, &state),
             Event::Disconnected => {
@@ -278,6 +295,8 @@ const fn is_activity(ev: &Event) -> bool {
             | Event::DisplayUpdated(_)
             | Event::BluetoothUpdated(_)
             | Event::StatsUpdated(_)
+            | Event::TracerouteResult(_)
+            | Event::TracerouteFailed { .. }
             | Event::MessageReceived(_)
             | Event::MessageStateChanged { .. }
     )

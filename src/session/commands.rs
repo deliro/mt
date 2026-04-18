@@ -25,6 +25,7 @@ pub enum Command {
     Admin(AdminAction),
     SetFavorite { node: crate::domain::ids::NodeId, favorite: bool },
     SetIgnored { node: crate::domain::ids::NodeId, ignored: bool },
+    Traceroute { node: crate::domain::ids::NodeId },
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]

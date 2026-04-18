@@ -44,6 +44,8 @@ pub enum Event {
     DisplayUpdated(crate::domain::config::DisplaySettings),
     BluetoothUpdated(crate::domain::config::BluetoothSettings),
     StatsUpdated(MeshStats),
+    TracerouteResult(crate::domain::traceroute::TracerouteResult),
+    TracerouteFailed { target: NodeId, reason: String },
     MessageReceived(TextMessage),
     MessageStateChanged { id: PacketId, state: DeliveryState },
     Disconnected,
@@ -90,7 +92,8 @@ impl DeviceSession {
                 | Command::RemoveFixedPosition
                 | Command::Admin(_)
                 | Command::SetFavorite { .. }
-                | Command::SetIgnored { .. } => {}
+                | Command::SetIgnored { .. }
+                | Command::Traceroute { .. } => {}
             }
         }
     }
@@ -153,7 +156,8 @@ async fn open_with_cancel(
                     | Command::RemoveFixedPosition
                     | Command::Admin(_)
                     | Command::SetFavorite { .. }
-                    | Command::SetIgnored { .. },
+                    | Command::SetIgnored { .. }
+                    | Command::Traceroute { .. },
                 ) => {
                     debug!("ignoring command while connecting");
                 }
@@ -301,10 +305,7 @@ async fn run_ready_loop(
     let mut heartbeat = interval(HEARTBEAT_INTERVAL);
     heartbeat.set_missed_tick_behavior(MissedTickBehavior::Delay);
     let _ = heartbeat.tick().await;
-    let mut pending: std::collections::HashMap<
-        PacketId,
-        tokio::sync::oneshot::Sender<()>,
-    > = std::collections::HashMap::default();
+    let mut pending = PendingOps::default();
 
     loop {
         let step = tokio::select! {
@@ -340,12 +341,19 @@ enum LoopStep {
     Channel,
 }
 
+#[derive(Default)]
+struct PendingOps {
+    text_sent: std::collections::HashSet<PacketId>,
+    text_acks: std::collections::HashMap<PacketId, tokio::sync::oneshot::Sender<()>>,
+    tracers: std::collections::HashMap<PacketId, tokio::sync::oneshot::Sender<()>>,
+}
+
 async fn handle_command(
     cmd: Command,
     my_node: NodeId,
     sink: &mut Pin<Box<impl futures::Sink<Vec<u8>, Error = crate::transport::TransportError> + ?Sized>>,
     tx: &mpsc::Sender<Event>,
-    pending: &mut std::collections::HashMap<PacketId, tokio::sync::oneshot::Sender<()>>,
+    pending: &mut PendingOps,
 ) -> LoopStep {
     match cmd {
         Command::Connect(_) => {
@@ -358,7 +366,8 @@ async fn handle_command(
             handle_send_text(sink, my_node, tx, pending, req).await
         }
         Command::AckTimeout(id) => {
-            if pending.remove(&id).is_some() {
+            if pending.text_acks.remove(&id).is_some() {
+                let _ = pending.text_sent.remove(&id);
                 let _ = tx
                     .send(Event::MessageStateChanged {
                         id,
@@ -367,6 +376,9 @@ async fn handle_command(
                     .await;
             }
             LoopStep::Continue
+        }
+        Command::Traceroute { node } => {
+            handle_traceroute(sink, my_node, tx, pending, node).await
         }
         other => handle_config_command(other, my_node, sink).await,
     }
@@ -383,20 +395,17 @@ async fn handle_send_text(
     sink: &mut Pin<Box<impl futures::Sink<Vec<u8>, Error = crate::transport::TransportError> + ?Sized>>,
     my_node: NodeId,
     tx: &mpsc::Sender<Event>,
-    pending: &mut std::collections::HashMap<PacketId, tokio::sync::oneshot::Sender<()>>,
+    pending: &mut PendingOps,
     req: SendTextRequest,
 ) -> LoopStep {
     let is_dm = matches!(req.to, Recipient::Node(_));
     let on_wire_want_ack = req.want_ack && is_dm;
     match send_text(sink, req.channel, req.to, &req.text, on_wire_want_ack).await {
         Ok(id) => {
-            let cancel = if is_dm {
-                Some(spawn_ack_timeout(tx.clone(), id))
-            } else {
-                None
-            };
-            if let Some(cancel) = cancel {
-                let _ = pending.insert(id, cancel);
+            let _ = pending.text_sent.insert(id);
+            if is_dm {
+                let cancel = spawn_ack_timeout(tx.clone(), id);
+                let _ = pending.text_acks.insert(id, cancel);
             }
             let _ = tx
                 .send(Event::MessageReceived(TextMessage {
@@ -443,6 +452,7 @@ async fn handle_config_command(
         Command::SetIgnored { node, ignored } => {
             send_ignored(sink, my_node, node, ignored).await
         }
+        Command::Traceroute { .. } => Ok(()),
         Command::Connect(_)
         | Command::Disconnect
         | Command::SendText { .. }
@@ -625,6 +635,81 @@ async fn send_remove_fixed_position(
     send_admin(sink, my_node, admin).await
 }
 
+const TRACEROUTE_TIMEOUT: Duration = Duration::from_secs(60);
+
+async fn handle_traceroute(
+    sink: &mut Pin<Box<impl futures::Sink<Vec<u8>, Error = crate::transport::TransportError> + ?Sized>>,
+    my_node: NodeId,
+    tx: &mpsc::Sender<Event>,
+    pending: &mut PendingOps,
+    target: NodeId,
+) -> LoopStep {
+    match send_traceroute(sink, my_node, target).await {
+        Ok(id) => {
+            let cancel = spawn_traceroute_timeout(tx.clone(), id, target);
+            let _ = pending.tracers.insert(id, cancel);
+            LoopStep::Continue
+        }
+        Err(e) => LoopStep::Error(e.to_string()),
+    }
+}
+
+async fn send_traceroute(
+    sink: &mut Pin<Box<impl futures::Sink<Vec<u8>, Error = crate::transport::TransportError> + ?Sized>>,
+    my_node: NodeId,
+    target: NodeId,
+) -> Result<PacketId, ConnectError> {
+    let id = PacketId::random();
+    let rd = meshtastic::RouteDiscovery::default();
+    let mut rd_buf = Vec::with_capacity(rd.encoded_len());
+    rd.encode(&mut rd_buf)?;
+    let data = meshtastic::Data {
+        portnum: meshtastic::PortNum::TracerouteApp as i32,
+        payload: rd_buf,
+        want_response: true,
+        ..Default::default()
+    };
+    let packet = meshtastic::MeshPacket {
+        from: my_node.0,
+        to: target.0,
+        channel: 0,
+        id: id.0,
+        want_ack: false,
+        payload_variant: Some(meshtastic::mesh_packet::PayloadVariant::Decoded(data)),
+        ..Default::default()
+    };
+    let msg = meshtastic::ToRadio {
+        payload_variant: Some(meshtastic::to_radio::PayloadVariant::Packet(packet)),
+    };
+    let mut buf = Vec::with_capacity(msg.encoded_len());
+    msg.encode(&mut buf)?;
+    sink.send(buf).await?;
+    Ok(id)
+}
+
+fn spawn_traceroute_timeout(
+    tx: mpsc::Sender<Event>,
+    id: PacketId,
+    target: NodeId,
+) -> tokio::sync::oneshot::Sender<()> {
+    let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel();
+    tokio::spawn(async move {
+        tokio::select! {
+            () = sleep(TRACEROUTE_TIMEOUT) => {
+                let _ = tx
+                    .send(Event::TracerouteFailed {
+                        target,
+                        reason: format!("no reply in {}s", TRACEROUTE_TIMEOUT.as_secs()),
+                    })
+                    .await;
+                let _ = id;
+            }
+            _ = cancel_rx => {}
+        }
+    });
+    cancel_tx
+}
+
 async fn send_favorite(
     sink: &mut Pin<Box<impl futures::Sink<Vec<u8>, Error = crate::transport::TransportError> + ?Sized>>,
     my_node: NodeId,
@@ -733,7 +818,7 @@ async fn handle_incoming(
     item: Option<Result<Vec<u8>, crate::transport::TransportError>>,
     my_node: NodeId,
     tx: &mpsc::Sender<Event>,
-    pending: &mut std::collections::HashMap<PacketId, tokio::sync::oneshot::Sender<()>>,
+    pending: &mut PendingOps,
 ) -> LoopStep {
     let Some(item) = item else { return LoopStep::Disconnect };
     let frame = match item {
@@ -753,16 +838,23 @@ async fn handle_incoming(
                 let _ = tx.send(ev).await;
             }
             IncomingOutcome::QueueOk(id) => {
-                if pending.contains_key(&id) {
+                if pending.text_sent.remove(&id) {
                     let _ = tx
                         .send(Event::MessageStateChanged { id, state: DeliveryState::Sent })
                         .await;
                 }
             }
             IncomingOutcome::Ack { id, state } => {
-                if let Some(cancel) = pending.remove(&id) {
+                if let Some(cancel) = pending.text_acks.remove(&id) {
                     let _ = cancel.send(());
+                    let _ = pending.text_sent.remove(&id);
                     let _ = tx.send(Event::MessageStateChanged { id, state }).await;
+                }
+            }
+            IncomingOutcome::RouteReply { request_id, route } => {
+                if let Some(cancel) = pending.tracers.remove(&request_id) {
+                    let _ = cancel.send(());
+                    let _ = tx.send(Event::TracerouteResult(route)).await;
                 }
             }
         }
@@ -774,6 +866,7 @@ enum IncomingOutcome {
     Event(Event),
     QueueOk(PacketId),
     Ack { id: PacketId, state: DeliveryState },
+    RouteReply { request_id: PacketId, route: crate::domain::traceroute::TracerouteResult },
 }
 
 async fn send_want_config_id(
@@ -970,25 +1063,49 @@ fn packet_outcomes(p: meshtastic::MeshPacket, my_node: NodeId) -> Vec<IncomingOu
             direction: Direction::Incoming,
             state: DeliveryState::Acked,
         }))],
-        PortPayload::Routing(r) => {
-            let id = PacketId(request_id);
-            let state = match r.variant {
-                Some(meshtastic::routing::Variant::ErrorReason(0)) => DeliveryState::Acked,
-                Some(meshtastic::routing::Variant::ErrorReason(code)) => {
-                    DeliveryState::Failed(format!("routing error {code}"))
-                }
-                Some(
-                    meshtastic::routing::Variant::RouteRequest(_)
-                    | meshtastic::routing::Variant::RouteReply(_),
-                )
-                | None => return Vec::new(),
-            };
-            vec![IncomingOutcome::Ack { id, state }]
-        }
+        PortPayload::Routing(r) => routing_to_outcomes(PacketId(request_id), NodeId(p.from), r),
         PortPayload::Position(_)
         | PortPayload::NodeInfo(_)
         | PortPayload::Admin(_)
         | PortPayload::Unknown { .. } => Vec::new(),
+    }
+}
+
+fn routing_to_outcomes(
+    request_id: PacketId,
+    from: NodeId,
+    r: meshtastic::Routing,
+) -> Vec<IncomingOutcome> {
+    use meshtastic::routing::Variant;
+    match r.variant {
+        Some(Variant::ErrorReason(0)) => {
+            vec![IncomingOutcome::Ack { id: request_id, state: DeliveryState::Acked }]
+        }
+        Some(Variant::ErrorReason(code)) => vec![IncomingOutcome::Ack {
+            id: request_id,
+            state: DeliveryState::Failed(format!("routing error {code}")),
+        }],
+        Some(Variant::RouteReply(rd)) => {
+            vec![IncomingOutcome::RouteReply {
+                request_id,
+                route: route_discovery_to_result(from, &rd),
+            }]
+        }
+        Some(Variant::RouteRequest(_)) | None => Vec::new(),
+    }
+}
+
+fn route_discovery_to_result(
+    target: NodeId,
+    rd: &meshtastic::RouteDiscovery,
+) -> crate::domain::traceroute::TracerouteResult {
+    crate::domain::traceroute::TracerouteResult {
+        target,
+        route: rd.route.iter().copied().map(NodeId).collect(),
+        snr_towards_db: rd.snr_towards.iter().map(|x| *x as f32 * 0.25).collect(),
+        route_back: rd.route_back.iter().copied().map(NodeId).collect(),
+        snr_back_db: rd.snr_back.iter().map(|x| *x as f32 * 0.25).collect(),
+        completed_at: std::time::SystemTime::now(),
     }
 }
 
