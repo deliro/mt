@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use crate::domain::channel::Channel;
 use crate::domain::config::{
     BluetoothSettings, DeviceSettings, DisplaySettings, LoraSettings, MqttSettings,
-    NetworkSettings, PositionSettings, PowerSettings, TelemetrySettings,
+    NeighborInfoSettings, NetworkSettings, PositionSettings, PowerSettings, TelemetrySettings,
 };
 use crate::domain::ids::NodeId;
 use crate::domain::message::TextMessage;
@@ -28,6 +28,7 @@ pub struct DeviceSnapshot {
     pub bluetooth: Option<BluetoothSettings>,
     pub mqtt: Option<MqttSettings>,
     pub telemetry: Option<TelemetrySettings>,
+    pub neighbor_info: Option<NeighborInfoSettings>,
     pub stats: MeshStats,
 }
 

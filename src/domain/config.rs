@@ -164,6 +164,13 @@ pub struct HealthMetricsCfg {
     pub update_interval_secs: u32,
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct NeighborInfoSettings {
+    pub enabled: bool,
+    pub transmit_over_lora: bool,
+    pub update_interval_secs: u32,
+}
+
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 pub enum ScreenOrientation {
     #[default]

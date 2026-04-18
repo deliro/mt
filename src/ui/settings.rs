@@ -6,10 +6,10 @@ use tokio::sync::mpsc;
 use crate::domain::config::{
     BluetoothSettings, CLOCK_CHOICES, DEVICE_ROLE_CHOICES, DISPLAY_UNITS_CHOICES, DeviceSettings,
     DisplaySettings, GPS_MODE_CHOICES, LoraSettings, MODEM_PRESET_CHOICES, MqttSettings,
-    NetworkSettings, ORIENTATION_CHOICES, PAIRING_MODE_CHOICES, PositionSettings, PowerSettings,
-    REBROADCAST_CHOICES, REGION_CHOICES, TelemetrySettings, clock_label, device_role_label,
-    display_units_label, gps_mode_label, modem_preset_label, orientation_label,
-    pairing_mode_label, rebroadcast_label, region_label,
+    NeighborInfoSettings, NetworkSettings, ORIENTATION_CHOICES, PAIRING_MODE_CHOICES,
+    PositionSettings, PowerSettings, REBROADCAST_CHOICES, REGION_CHOICES, TelemetrySettings,
+    clock_label, device_role_label, display_units_label, gps_mode_label, modem_preset_label,
+    orientation_label, pairing_mode_label, rebroadcast_label, region_label,
 };
 use crate::domain::snapshot::DeviceSnapshot;
 use crate::session::commands::{AdminAction, Command};
@@ -26,6 +26,7 @@ pub enum Section {
     Bluetooth,
     Mqtt,
     Telemetry,
+    NeighborInfo,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -63,6 +64,7 @@ pub struct Draft {
     pub bluetooth: BluetoothSettings,
     pub mqtt: MqttSettings,
     pub telemetry: TelemetrySettings,
+    pub neighbor_info: NeighborInfoSettings,
 }
 
 #[derive(Default, Clone)]
@@ -105,6 +107,7 @@ fn sections(ui: &mut egui::Ui, s: &mut SettingsUi, cmd: &mpsc::UnboundedSender<C
     collapsible(ui, "Bluetooth", |ui| bluetooth_section(ui, s, cmd));
     collapsible(ui, "MQTT", |ui| mqtt_section(ui, s, cmd));
     collapsible(ui, "Telemetry module", |ui| telemetry_section(ui, s, cmd));
+    collapsible(ui, "Neighbor Info", |ui| neighbor_info_section(ui, s, cmd));
     collapsible(ui, "Admin", |ui| admin_section(ui, s));
     collapsible(ui, "Storage", |ui| storage_section(ui, s));
     admin_confirm_modal(ui.ctx(), s, cmd);
@@ -1012,6 +1015,47 @@ fn telemetry_family_fields(
     });
 }
 
+// ---- Neighbor Info ----
+
+fn neighbor_info_section(
+    ui: &mut egui::Ui,
+    s: &mut SettingsUi,
+    cmd: &mpsc::UnboundedSender<Command>,
+) {
+    let mut dirty = s.dirty.is(Section::NeighborInfo);
+    checkbox(
+        ui,
+        "Enabled",
+        &mut s.draft.neighbor_info.enabled,
+        &mut dirty,
+        "Run the NeighborInfo module. When on, the node periodically broadcasts which neighbours it hears, which helps mesh topology tools.",
+    );
+    checkbox(
+        ui,
+        "Transmit over LoRa",
+        &mut s.draft.neighbor_info.transmit_over_lora,
+        &mut dirty,
+        "Also broadcast NeighborInfo on the mesh (not just MQTT / phone API). Note: firmware forbids this on a channel using the default key+name.",
+    );
+    u32_drag(
+        ui,
+        "Update every (s)",
+        &mut s.draft.neighbor_info.update_interval_secs,
+        0..=86_400,
+        &mut dirty,
+        "How often NeighborInfo is broadcast. Firmware enforces a minimum of 14400 (4 h) — smaller values are clamped to protect the airtime budget.",
+    );
+    commit(
+        s,
+        Section::NeighborInfo,
+        dirty,
+        ui,
+        "Save Neighbor Info",
+        cmd,
+        |d| Command::SetNeighborInfo(d.neighbor_info.clone()),
+    );
+}
+
 // ---- Commit helper ----
 
 fn commit(
@@ -1046,6 +1090,7 @@ const fn section_label(section: Section) -> &'static str {
         Section::Bluetooth => "Bluetooth",
         Section::Mqtt => "MQTT",
         Section::Telemetry => "Telemetry module",
+        Section::NeighborInfo => "Neighbor Info",
     }
 }
 
@@ -1217,6 +1262,11 @@ fn sync_from_snapshot(snapshot: &DeviceSnapshot, s: &mut SettingsUi) {
         snapshot.telemetry.as_ref(),
         &mut s.draft.telemetry,
         s.dirty.is(Section::Telemetry),
+    );
+    sync_section(
+        snapshot.neighbor_info.as_ref(),
+        &mut s.draft.neighbor_info,
+        s.dirty.is(Section::NeighborInfo),
     );
     if !s.dirty.is(Section::Position) {
         if let Some(pos) = snapshot.nodes.get(&snapshot.my_node).and_then(|n| n.position.as_ref()) {

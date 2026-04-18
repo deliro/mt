@@ -61,6 +61,7 @@ pub enum Event {
     BluetoothUpdated(crate::domain::config::BluetoothSettings),
     MqttUpdated(crate::domain::config::MqttSettings),
     TelemetryCfgUpdated(crate::domain::config::TelemetrySettings),
+    NeighborInfoUpdated(crate::domain::config::NeighborInfoSettings),
     StatsUpdated(MeshStats),
     TracerouteResult(crate::domain::traceroute::TracerouteResult),
     TracerouteFailed { target: NodeId, reason: String },
@@ -114,7 +115,8 @@ impl DeviceSession {
                 | Command::Traceroute { .. }
                 | Command::SetChannel(_)
                 | Command::SetMqtt(_)
-                | Command::SetTelemetryCfg(_) => {}
+                | Command::SetTelemetryCfg(_)
+                | Command::SetNeighborInfo(_) => {}
             }
         }
     }
@@ -181,7 +183,8 @@ async fn open_with_cancel(
                     | Command::Traceroute { .. }
                     | Command::SetChannel(_)
                     | Command::SetMqtt(_)
-                    | Command::SetTelemetryCfg(_),
+                    | Command::SetTelemetryCfg(_)
+                    | Command::SetNeighborInfo(_),
                 ) => {
                     debug!("ignoring command while connecting");
                 }
@@ -265,6 +268,7 @@ struct InitAcc {
     bluetooth: Option<crate::domain::config::BluetoothSettings>,
     mqtt: Option<crate::domain::config::MqttSettings>,
     telemetry: Option<crate::domain::config::TelemetrySettings>,
+    neighbor_info: Option<crate::domain::config::NeighborInfoSettings>,
     messages: Vec<TextMessage>,
 }
 
@@ -289,6 +293,7 @@ impl InitAcc {
             HandshakeFragment::Bluetooth(settings) => self.bluetooth = Some(settings),
             HandshakeFragment::Mqtt(settings) => self.mqtt = Some(settings),
             HandshakeFragment::Telemetry(settings) => self.telemetry = Some(settings),
+            HandshakeFragment::NeighborInfo(settings) => self.neighbor_info = Some(settings),
             HandshakeFragment::Message(msg) => self.messages.push(msg),
             HandshakeFragment::ConfigComplete { .. }
             | HandshakeFragment::MessageStateChanged { .. }
@@ -320,6 +325,7 @@ impl InitAcc {
             bluetooth: self.bluetooth,
             mqtt: self.mqtt,
             telemetry: self.telemetry,
+            neighbor_info: self.neighbor_info,
         }
     }
 }
@@ -524,6 +530,7 @@ async fn handle_config_command(
         Command::SetChannel(channel) => send_set_channel(sink, my_node, &channel).await,
         Command::SetMqtt(s) => send_set_mqtt(sink, my_node, &s).await,
         Command::SetTelemetryCfg(s) => send_set_telemetry_cfg(sink, my_node, &s).await,
+        Command::SetNeighborInfo(s) => send_set_neighbor_info(sink, my_node, &s).await,
         Command::Traceroute { .. } => Ok(()),
         Command::Connect(_)
         | Command::Disconnect
@@ -861,6 +868,24 @@ async fn send_set_telemetry_cfg(
         sink,
         my_node,
         meshtastic::module_config::PayloadVariant::Telemetry(t),
+    )
+    .await
+}
+
+async fn send_set_neighbor_info(
+    sink: SinkRef<'_, impl FrameSink + ?Sized>,
+    my_node: NodeId,
+    s: &crate::domain::config::NeighborInfoSettings,
+) -> Result<(), ConnectError> {
+    let ni = meshtastic::module_config::NeighborInfoConfig {
+        enabled: s.enabled,
+        update_interval: s.update_interval_secs,
+        transmit_over_lora: s.transmit_over_lora,
+    };
+    send_module_config(
+        sink,
+        my_node,
+        meshtastic::module_config::PayloadVariant::NeighborInfo(ni),
     )
     .await
 }
@@ -1209,7 +1234,7 @@ fn config_to_events(cfg: meshtastic::Config) -> Vec<IncomingOutcome> {
 
 fn module_config_to_events(cfg: meshtastic::ModuleConfig) -> Vec<IncomingOutcome> {
     use meshtastic::module_config::PayloadVariant;
-    use crate::session::handshake::{mqtt_from_proto, telemetry_from_proto};
+    use crate::session::handshake::{mqtt_from_proto, neighbor_info_from_proto, telemetry_from_proto};
     let Some(variant) = cfg.payload_variant else { return Vec::new() };
     match variant {
         PayloadVariant::Mqtt(m) => {
@@ -1218,6 +1243,9 @@ fn module_config_to_events(cfg: meshtastic::ModuleConfig) -> Vec<IncomingOutcome
         PayloadVariant::Telemetry(t) => {
             vec![IncomingOutcome::Event(Event::TelemetryCfgUpdated(telemetry_from_proto(&t)))]
         }
+        PayloadVariant::NeighborInfo(n) => {
+            vec![IncomingOutcome::Event(Event::NeighborInfoUpdated(neighbor_info_from_proto(n)))]
+        }
         PayloadVariant::Serial(_)
         | PayloadVariant::ExternalNotification(_)
         | PayloadVariant::StoreForward(_)
@@ -1225,7 +1253,6 @@ fn module_config_to_events(cfg: meshtastic::ModuleConfig) -> Vec<IncomingOutcome
         | PayloadVariant::CannedMessage(_)
         | PayloadVariant::Audio(_)
         | PayloadVariant::RemoteHardware(_)
-        | PayloadVariant::NeighborInfo(_)
         | PayloadVariant::AmbientLighting(_)
         | PayloadVariant::DetectionSensor(_)
         | PayloadVariant::Paxcounter(_)

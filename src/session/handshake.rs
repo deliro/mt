@@ -3,7 +3,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use crate::domain::channel::{Channel, ChannelRole};
 use crate::domain::config::{
     BluetoothSettings, DeviceSettings, DisplaySettings, LoraSettings, MqttSettings,
-    NetworkSettings, PositionSettings, PowerSettings, TelemetrySettings,
+    NeighborInfoSettings, NetworkSettings, PositionSettings, PowerSettings, TelemetrySettings,
 };
 use crate::domain::ids::{BROADCAST_NODE, ChannelIndex, ConfigId, NodeId, PacketId};
 use crate::domain::message::{DeliveryState, Direction, Recipient, TextMessage};
@@ -170,6 +170,9 @@ fn module_config_fragments(cfg: meshtastic::ModuleConfig) -> Vec<HandshakeFragme
         PayloadVariant::Telemetry(t) => {
             vec![HandshakeFragment::Telemetry(telemetry_from_proto(&t))]
         }
+        PayloadVariant::NeighborInfo(n) => {
+            vec![HandshakeFragment::NeighborInfo(neighbor_info_from_proto(n))]
+        }
         PayloadVariant::Serial(_)
         | PayloadVariant::ExternalNotification(_)
         | PayloadVariant::StoreForward(_)
@@ -177,13 +180,22 @@ fn module_config_fragments(cfg: meshtastic::ModuleConfig) -> Vec<HandshakeFragme
         | PayloadVariant::CannedMessage(_)
         | PayloadVariant::Audio(_)
         | PayloadVariant::RemoteHardware(_)
-        | PayloadVariant::NeighborInfo(_)
         | PayloadVariant::AmbientLighting(_)
         | PayloadVariant::DetectionSensor(_)
         | PayloadVariant::Paxcounter(_)
         | PayloadVariant::Statusmessage(_)
         | PayloadVariant::TrafficManagement(_)
         | PayloadVariant::Tak(_) => Vec::new(),
+    }
+}
+
+pub const fn neighbor_info_from_proto(
+    n: meshtastic::module_config::NeighborInfoConfig,
+) -> NeighborInfoSettings {
+    NeighborInfoSettings {
+        enabled: n.enabled,
+        transmit_over_lora: n.transmit_over_lora,
+        update_interval_secs: n.update_interval,
     }
 }
 
