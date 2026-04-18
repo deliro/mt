@@ -128,6 +128,7 @@ impl App {
             Event::MqttUpdated(s) => self.state.snapshot.mqtt = Some(s),
             Event::TelemetryCfgUpdated(s) => self.state.snapshot.telemetry = Some(s),
             Event::NeighborInfoUpdated(s) => self.state.snapshot.neighbor_info = Some(s),
+            Event::StoreForwardUpdated(s) => self.state.snapshot.store_forward = Some(s),
             Event::StatsUpdated(stats) => self.state.snapshot.stats.merge(&stats),
             Event::TracerouteResult(result) => {
                 let target = result.target;
@@ -306,6 +307,7 @@ const fn is_activity(ev: &Event) -> bool {
             | Event::MqttUpdated(_)
             | Event::TelemetryCfgUpdated(_)
             | Event::NeighborInfoUpdated(_)
+            | Event::StoreForwardUpdated(_)
             | Event::StatsUpdated(_)
             | Event::TracerouteResult(_)
             | Event::TracerouteFailed { .. }

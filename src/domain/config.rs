@@ -171,6 +171,16 @@ pub struct NeighborInfoSettings {
     pub update_interval_secs: u32,
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct StoreForwardSettings {
+    pub enabled: bool,
+    pub is_server: bool,
+    pub heartbeat: bool,
+    pub records: u32,
+    pub history_return_max: u32,
+    pub history_return_window_secs: u32,
+}
+
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 pub enum ScreenOrientation {
     #[default]

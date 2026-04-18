@@ -7,9 +7,9 @@ use crate::domain::config::{
     BluetoothSettings, CLOCK_CHOICES, DEVICE_ROLE_CHOICES, DISPLAY_UNITS_CHOICES, DeviceSettings,
     DisplaySettings, GPS_MODE_CHOICES, LoraSettings, MODEM_PRESET_CHOICES, MqttSettings,
     NeighborInfoSettings, NetworkSettings, ORIENTATION_CHOICES, PAIRING_MODE_CHOICES,
-    PositionSettings, PowerSettings, REBROADCAST_CHOICES, REGION_CHOICES, TelemetrySettings,
-    clock_label, device_role_label, display_units_label, gps_mode_label, modem_preset_label,
-    orientation_label, pairing_mode_label, rebroadcast_label, region_label,
+    PositionSettings, PowerSettings, REBROADCAST_CHOICES, REGION_CHOICES, StoreForwardSettings,
+    TelemetrySettings, clock_label, device_role_label, display_units_label, gps_mode_label,
+    modem_preset_label, orientation_label, pairing_mode_label, rebroadcast_label, region_label,
 };
 use crate::domain::snapshot::DeviceSnapshot;
 use crate::session::commands::{AdminAction, Command};
@@ -27,6 +27,7 @@ pub enum Section {
     Mqtt,
     Telemetry,
     NeighborInfo,
+    StoreForward,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -65,6 +66,7 @@ pub struct Draft {
     pub mqtt: MqttSettings,
     pub telemetry: TelemetrySettings,
     pub neighbor_info: NeighborInfoSettings,
+    pub store_forward: StoreForwardSettings,
 }
 
 #[derive(Default, Clone)]
@@ -108,6 +110,7 @@ fn sections(ui: &mut egui::Ui, s: &mut SettingsUi, cmd: &mpsc::UnboundedSender<C
     collapsible(ui, "MQTT", |ui| mqtt_section(ui, s, cmd));
     collapsible(ui, "Telemetry module", |ui| telemetry_section(ui, s, cmd));
     collapsible(ui, "Neighbor Info", |ui| neighbor_info_section(ui, s, cmd));
+    collapsible(ui, "Store & Forward", |ui| store_forward_section(ui, s, cmd));
     collapsible(ui, "Admin", |ui| admin_section(ui, s));
     collapsible(ui, "Storage", |ui| storage_section(ui, s));
     admin_confirm_modal(ui.ctx(), s, cmd);
@@ -1056,6 +1059,70 @@ fn neighbor_info_section(
     );
 }
 
+// ---- Store & Forward ----
+
+fn store_forward_section(
+    ui: &mut egui::Ui,
+    s: &mut SettingsUi,
+    cmd: &mpsc::UnboundedSender<Command>,
+) {
+    let mut dirty = s.dirty.is(Section::StoreForward);
+    checkbox(
+        ui,
+        "Enabled",
+        &mut s.draft.store_forward.enabled,
+        &mut dirty,
+        "Run the Store-and-Forward module. Required on both server and client sides to use message buffering.",
+    );
+    checkbox(
+        ui,
+        "Act as a server",
+        &mut s.draft.store_forward.is_server,
+        &mut dirty,
+        "This node stores incoming messages and replays them to peers that request history. Server mode needs PSRAM — enabling it on a bare ESP32 without PSRAM is a no-op.",
+    );
+    checkbox(
+        ui,
+        "Broadcast heartbeat",
+        &mut s.draft.store_forward.heartbeat,
+        &mut dirty,
+        "Servers periodically announce their presence so clients know whom to ask for history. Off = clients must know the server node-id.",
+    );
+    u32_drag(
+        ui,
+        "Server: buffer size (records)",
+        &mut s.draft.store_forward.records,
+        0..=10_000,
+        &mut dirty,
+        "How many recent packets the server keeps in its ring buffer. 0 = firmware default. Higher = more history, more PSRAM used.",
+    );
+    u32_drag(
+        ui,
+        "Client: max records per reply",
+        &mut s.draft.store_forward.history_return_max,
+        0..=10_000,
+        &mut dirty,
+        "When asking a server for history, cap on how many packets it may send back in one go. 0 = firmware default.",
+    );
+    u32_drag(
+        ui,
+        "Client: history window (s)",
+        &mut s.draft.store_forward.history_return_window_secs,
+        0..=604_800,
+        &mut dirty,
+        "Ask the server for messages no older than this many seconds. 0 = firmware default (typically 1h).",
+    );
+    commit(
+        s,
+        Section::StoreForward,
+        dirty,
+        ui,
+        "Save Store & Forward",
+        cmd,
+        |d| Command::SetStoreForward(d.store_forward.clone()),
+    );
+}
+
 // ---- Commit helper ----
 
 fn commit(
@@ -1091,6 +1158,7 @@ const fn section_label(section: Section) -> &'static str {
         Section::Mqtt => "MQTT",
         Section::Telemetry => "Telemetry module",
         Section::NeighborInfo => "Neighbor Info",
+        Section::StoreForward => "Store & Forward",
     }
 }
 
@@ -1267,6 +1335,11 @@ fn sync_from_snapshot(snapshot: &DeviceSnapshot, s: &mut SettingsUi) {
         snapshot.neighbor_info.as_ref(),
         &mut s.draft.neighbor_info,
         s.dirty.is(Section::NeighborInfo),
+    );
+    sync_section(
+        snapshot.store_forward.as_ref(),
+        &mut s.draft.store_forward,
+        s.dirty.is(Section::StoreForward),
     );
     if !s.dirty.is(Section::Position) {
         if let Some(pos) = snapshot.nodes.get(&snapshot.my_node).and_then(|n| n.position.as_ref()) {

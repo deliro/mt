@@ -3,7 +3,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use crate::domain::channel::{Channel, ChannelRole};
 use crate::domain::config::{
     BluetoothSettings, DeviceSettings, DisplaySettings, LoraSettings, MqttSettings,
-    NeighborInfoSettings, NetworkSettings, PositionSettings, PowerSettings, TelemetrySettings,
+    NeighborInfoSettings, NetworkSettings, PositionSettings, PowerSettings, StoreForwardSettings,
+    TelemetrySettings,
 };
 use crate::domain::ids::{BROADCAST_NODE, ChannelIndex, ConfigId, NodeId, PacketId};
 use crate::domain::message::{DeliveryState, Direction, Recipient, TextMessage};
@@ -173,9 +174,11 @@ fn module_config_fragments(cfg: meshtastic::ModuleConfig) -> Vec<HandshakeFragme
         PayloadVariant::NeighborInfo(n) => {
             vec![HandshakeFragment::NeighborInfo(neighbor_info_from_proto(n))]
         }
+        PayloadVariant::StoreForward(sf) => {
+            vec![HandshakeFragment::StoreForward(store_forward_from_proto(sf))]
+        }
         PayloadVariant::Serial(_)
         | PayloadVariant::ExternalNotification(_)
-        | PayloadVariant::StoreForward(_)
         | PayloadVariant::RangeTest(_)
         | PayloadVariant::CannedMessage(_)
         | PayloadVariant::Audio(_)
@@ -196,6 +199,19 @@ pub const fn neighbor_info_from_proto(
         enabled: n.enabled,
         transmit_over_lora: n.transmit_over_lora,
         update_interval_secs: n.update_interval,
+    }
+}
+
+pub const fn store_forward_from_proto(
+    s: meshtastic::module_config::StoreForwardConfig,
+) -> StoreForwardSettings {
+    StoreForwardSettings {
+        enabled: s.enabled,
+        is_server: s.is_server,
+        heartbeat: s.heartbeat,
+        records: s.records,
+        history_return_max: s.history_return_max,
+        history_return_window_secs: s.history_return_window,
     }
 }
 

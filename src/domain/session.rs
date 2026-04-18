@@ -37,6 +37,7 @@ pub struct HandshakeAcc {
     pub mqtt: Option<crate::domain::config::MqttSettings>,
     pub telemetry: Option<crate::domain::config::TelemetrySettings>,
     pub neighbor_info: Option<crate::domain::config::NeighborInfoSettings>,
+    pub store_forward: Option<crate::domain::config::StoreForwardSettings>,
 }
 
 pub fn start_handshake(transport: TransportKind, config_id: ConfigId) -> SessionState {
@@ -59,6 +60,7 @@ pub fn start_handshake(transport: TransportKind, config_id: ConfigId) -> Session
         mqtt: None,
         telemetry: None,
         neighbor_info: None,
+        store_forward: None,
     })
 }
 
@@ -78,6 +80,7 @@ pub enum HandshakeFragment {
     Mqtt(crate::domain::config::MqttSettings),
     Telemetry(crate::domain::config::TelemetrySettings),
     NeighborInfo(crate::domain::config::NeighborInfoSettings),
+    StoreForward(crate::domain::config::StoreForwardSettings),
     ConfigComplete { id: ConfigId },
     Message(TextMessage),
     MessageStateChanged { id: PacketId, state: DeliveryState },
@@ -162,6 +165,10 @@ fn apply_handshake(mut acc: HandshakeAcc, event: HandshakeFragment) -> SessionSt
             acc.neighbor_info = Some(settings);
             SessionState::Handshake(acc)
         }
+        HandshakeFragment::StoreForward(settings) => {
+            acc.store_forward = Some(settings);
+            SessionState::Handshake(acc)
+        }
         HandshakeFragment::ConfigComplete { id } => {
             if id != acc.config_id {
                 return SessionState::Handshake(acc);
@@ -193,6 +200,7 @@ fn apply_handshake(mut acc: HandshakeAcc, event: HandshakeFragment) -> SessionSt
                 mqtt: acc.mqtt,
                 telemetry: acc.telemetry,
                 neighbor_info: acc.neighbor_info,
+                store_forward: acc.store_forward,
                 stats: crate::domain::stats::MeshStats::default(),
             })
         }
@@ -245,6 +253,10 @@ fn apply_ready(mut snap: DeviceSnapshot, event: HandshakeFragment) -> SessionSta
         }
         HandshakeFragment::NeighborInfo(settings) => {
             snap.neighbor_info = Some(settings);
+            SessionState::Ready(snap)
+        }
+        HandshakeFragment::StoreForward(settings) => {
+            snap.store_forward = Some(settings);
             SessionState::Ready(snap)
         }
         HandshakeFragment::Node(node) => {
