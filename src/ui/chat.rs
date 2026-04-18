@@ -180,17 +180,18 @@ fn composer(
 fn render_delivery(ui: &mut egui::Ui, state: &DeliveryState) {
     match state {
         DeliveryState::Queued => {
-            ui.weak("queued").on_hover_text("queued on phone");
+            ui.weak("○ queued").on_hover_text("queued on phone, not yet handed to the radio");
         }
         DeliveryState::Sent => {
-            ui.weak("sent").on_hover_text("accepted by device");
+            ui.weak("◐ sent").on_hover_text("accepted by device, transmitted on the mesh");
         }
         DeliveryState::Acked => {
-            ui.colored_label(egui::Color32::LIGHT_GREEN, "acked")
-                .on_hover_text("acknowledged by mesh");
+            ui.colored_label(egui::Color32::LIGHT_GREEN, "✓ acked")
+                .on_hover_text("acknowledged by the destination node");
         }
         DeliveryState::Failed(reason) => {
-            ui.colored_label(egui::Color32::LIGHT_RED, format!("failed: {reason}"));
+            ui.colored_label(egui::Color32::LIGHT_RED, format!("✗ {reason}"))
+                .on_hover_text("delivery failed");
         }
     }
 }
