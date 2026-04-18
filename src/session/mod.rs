@@ -48,6 +48,7 @@ pub enum Event {
     NetworkUpdated(crate::domain::config::NetworkSettings),
     DisplayUpdated(crate::domain::config::DisplaySettings),
     BluetoothUpdated(crate::domain::config::BluetoothSettings),
+    MqttUpdated(crate::domain::config::MqttSettings),
     StatsUpdated(MeshStats),
     TracerouteResult(crate::domain::traceroute::TracerouteResult),
     TracerouteFailed { target: NodeId, reason: String },
@@ -99,7 +100,8 @@ impl DeviceSession {
                 | Command::SetFavorite { .. }
                 | Command::SetIgnored { .. }
                 | Command::Traceroute { .. }
-                | Command::SetChannel(_) => {}
+                | Command::SetChannel(_)
+                | Command::SetMqtt(_) => {}
             }
         }
     }
@@ -164,7 +166,8 @@ async fn open_with_cancel(
                     | Command::SetFavorite { .. }
                     | Command::SetIgnored { .. }
                     | Command::Traceroute { .. }
-                    | Command::SetChannel(_),
+                    | Command::SetChannel(_)
+                    | Command::SetMqtt(_),
                 ) => {
                     debug!("ignoring command while connecting");
                 }
@@ -246,6 +249,7 @@ struct InitAcc {
     network: Option<crate::domain::config::NetworkSettings>,
     display: Option<crate::domain::config::DisplaySettings>,
     bluetooth: Option<crate::domain::config::BluetoothSettings>,
+    mqtt: Option<crate::domain::config::MqttSettings>,
     messages: Vec<TextMessage>,
 }
 
@@ -268,6 +272,7 @@ impl InitAcc {
             HandshakeFragment::Network(settings) => self.network = Some(settings),
             HandshakeFragment::Display(settings) => self.display = Some(settings),
             HandshakeFragment::Bluetooth(settings) => self.bluetooth = Some(settings),
+            HandshakeFragment::Mqtt(settings) => self.mqtt = Some(settings),
             HandshakeFragment::Message(msg) => self.messages.push(msg),
             HandshakeFragment::ConfigComplete { .. }
             | HandshakeFragment::MessageStateChanged { .. }
@@ -297,6 +302,7 @@ impl InitAcc {
             stats: crate::domain::stats::MeshStats::default(),
             display: self.display,
             bluetooth: self.bluetooth,
+            mqtt: self.mqtt,
         }
     }
 }
@@ -460,6 +466,7 @@ async fn handle_config_command(
             send_ignored(sink, my_node, node, ignored).await
         }
         Command::SetChannel(channel) => send_set_channel(sink, my_node, &channel).await,
+        Command::SetMqtt(s) => send_set_mqtt(sink, my_node, &s).await,
         Command::Traceroute { .. } => Ok(()),
         Command::Connect(_)
         | Command::Disconnect
@@ -741,6 +748,49 @@ async fn send_favorite(
     send_admin(sink, my_node, admin).await
 }
 
+async fn send_set_mqtt(
+    sink: SinkRef<'_, impl FrameSink + ?Sized>,
+    my_node: NodeId,
+    s: &crate::domain::config::MqttSettings,
+) -> Result<(), ConnectError> {
+    let mqtt = meshtastic::module_config::MqttConfig {
+        enabled: s.enabled,
+        address: s.address.clone(),
+        username: s.username.clone(),
+        password: s.password.clone(),
+        encryption_enabled: s.payload.encrypted,
+        json_enabled: s.payload.json,
+        tls_enabled: s.tls_enabled,
+        root: s.root.clone(),
+        proxy_to_client_enabled: s.proxy_to_client_enabled,
+        map_reporting_enabled: s.map.enabled,
+        map_report_settings: Some(meshtastic::module_config::MapReportSettings {
+            publish_interval_secs: s.map.publish_interval_secs,
+            position_precision: s.map.position_precision,
+            should_report_location: s.map.publish_location,
+        }),
+    };
+    send_module_config(
+        sink,
+        my_node,
+        meshtastic::module_config::PayloadVariant::Mqtt(mqtt),
+    )
+    .await
+}
+
+async fn send_module_config(
+    sink: SinkRef<'_, impl FrameSink + ?Sized>,
+    my_node: NodeId,
+    payload: meshtastic::module_config::PayloadVariant,
+) -> Result<(), ConnectError> {
+    let cfg = meshtastic::ModuleConfig { payload_variant: Some(payload) };
+    let admin = meshtastic::AdminMessage {
+        payload_variant: Some(meshtastic::admin_message::PayloadVariant::SetModuleConfig(cfg)),
+        ..Default::default()
+    };
+    send_admin(sink, my_node, admin).await
+}
+
 async fn send_set_channel(
     sink: SinkRef<'_, impl FrameSink + ?Sized>,
     my_node: NodeId,
@@ -1014,6 +1064,7 @@ fn incoming_outcomes(msg: meshtastic::FromRadio, my_node: NodeId) -> Vec<Incomin
             .map(IncomingOutcome::Event)
             .collect(),
         PayloadVariant::Config(cfg) => config_to_events(cfg),
+        PayloadVariant::ModuleConfig(cfg) => module_config_to_events(cfg),
         PayloadVariant::QueueStatus(qs) if qs.res == 0 => {
             vec![IncomingOutcome::QueueOk(PacketId(qs.mesh_packet_id))]
         }
@@ -1022,7 +1073,6 @@ fn incoming_outcomes(msg: meshtastic::FromRadio, my_node: NodeId) -> Vec<Incomin
             state: DeliveryState::Failed(format!("device queue rejected ({})", qs.res)),
         }],
         PayloadVariant::MyInfo(_)
-        | PayloadVariant::ModuleConfig(_)
         | PayloadVariant::ConfigCompleteId(_)
         | PayloadVariant::Rebooted(_)
         | PayloadVariant::XmodemPacket(_)
@@ -1067,6 +1117,32 @@ fn config_to_events(cfg: meshtastic::Config) -> Vec<IncomingOutcome> {
         PayloadVariant::Security(_) | PayloadVariant::Sessionkey(_) | PayloadVariant::DeviceUi(_) => {
             Vec::new()
         }
+    }
+}
+
+fn module_config_to_events(cfg: meshtastic::ModuleConfig) -> Vec<IncomingOutcome> {
+    use meshtastic::module_config::PayloadVariant;
+    use crate::session::handshake::mqtt_from_proto;
+    let Some(variant) = cfg.payload_variant else { return Vec::new() };
+    match variant {
+        PayloadVariant::Mqtt(m) => {
+            vec![IncomingOutcome::Event(Event::MqttUpdated(mqtt_from_proto(&m)))]
+        }
+        PayloadVariant::Serial(_)
+        | PayloadVariant::ExternalNotification(_)
+        | PayloadVariant::StoreForward(_)
+        | PayloadVariant::RangeTest(_)
+        | PayloadVariant::Telemetry(_)
+        | PayloadVariant::CannedMessage(_)
+        | PayloadVariant::Audio(_)
+        | PayloadVariant::RemoteHardware(_)
+        | PayloadVariant::NeighborInfo(_)
+        | PayloadVariant::AmbientLighting(_)
+        | PayloadVariant::DetectionSensor(_)
+        | PayloadVariant::Paxcounter(_)
+        | PayloadVariant::Statusmessage(_)
+        | PayloadVariant::TrafficManagement(_)
+        | PayloadVariant::Tak(_) => Vec::new(),
     }
 }
 

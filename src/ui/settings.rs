@@ -5,8 +5,8 @@ use tokio::sync::mpsc;
 
 use crate::domain::config::{
     BluetoothSettings, CLOCK_CHOICES, DEVICE_ROLE_CHOICES, DISPLAY_UNITS_CHOICES, DeviceSettings,
-    DisplaySettings, GPS_MODE_CHOICES, LoraSettings, MODEM_PRESET_CHOICES, NetworkSettings,
-    ORIENTATION_CHOICES, PAIRING_MODE_CHOICES, PositionSettings, PowerSettings,
+    DisplaySettings, GPS_MODE_CHOICES, LoraSettings, MODEM_PRESET_CHOICES, MqttSettings,
+    NetworkSettings, ORIENTATION_CHOICES, PAIRING_MODE_CHOICES, PositionSettings, PowerSettings,
     REBROADCAST_CHOICES, REGION_CHOICES, clock_label, device_role_label, display_units_label,
     gps_mode_label, modem_preset_label, orientation_label, pairing_mode_label, rebroadcast_label,
     region_label,
@@ -24,6 +24,7 @@ pub enum Section {
     Network,
     Display,
     Bluetooth,
+    Mqtt,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -59,6 +60,7 @@ pub struct Draft {
     pub network: NetworkSettings,
     pub display: DisplaySettings,
     pub bluetooth: BluetoothSettings,
+    pub mqtt: MqttSettings,
 }
 
 #[derive(Default, Clone)]
@@ -99,6 +101,7 @@ fn sections(ui: &mut egui::Ui, s: &mut SettingsUi, cmd: &mpsc::UnboundedSender<C
     collapsible(ui, "Network", |ui| network_section(ui, s, cmd));
     collapsible(ui, "Display", |ui| display_section(ui, s, cmd));
     collapsible(ui, "Bluetooth", |ui| bluetooth_section(ui, s, cmd));
+    collapsible(ui, "MQTT", |ui| mqtt_section(ui, s, cmd));
     collapsible(ui, "Admin", |ui| admin_section(ui, s));
     collapsible(ui, "Storage", |ui| storage_section(ui, s));
     admin_confirm_modal(ui.ctx(), s, cmd);
@@ -734,6 +737,136 @@ fn bluetooth_section(
     );
 }
 
+// ---- MQTT ----
+
+fn mqtt_section(
+    ui: &mut egui::Ui,
+    s: &mut SettingsUi,
+    cmd: &mpsc::UnboundedSender<Command>,
+) {
+    let mut dirty = s.dirty.is(Section::Mqtt);
+    mqtt_transport_fields(ui, s, &mut dirty);
+    mqtt_broker_fields(ui, s);
+    mqtt_payload_fields(ui, s, &mut dirty);
+    ui.separator();
+    ui.label(egui::RichText::new("Map reporting").strong());
+    mqtt_map_fields(ui, s, &mut dirty);
+    commit(
+        s,
+        Section::Mqtt,
+        dirty,
+        ui,
+        "Save MQTT",
+        cmd,
+        |d| Command::SetMqtt(d.mqtt.clone()),
+    );
+}
+
+fn mqtt_transport_fields(ui: &mut egui::Ui, s: &mut SettingsUi, dirty: &mut bool) {
+    checkbox(
+        ui,
+        "Enabled",
+        &mut s.draft.mqtt.enabled,
+        dirty,
+        "Enable the MQTT gateway module. When on, the device bridges channels marked Uplink/Downlink to an MQTT broker.",
+    );
+    checkbox(
+        ui,
+        "Proxy via phone",
+        &mut s.draft.mqtt.proxy_to_client_enabled,
+        dirty,
+        "Use the connected phone/client as the MQTT transport instead of the device's own Wi-Fi. Handy when the node has no internet of its own.",
+    );
+    checkbox(
+        ui,
+        "TLS",
+        &mut s.draft.mqtt.tls_enabled,
+        dirty,
+        "Connect to the broker over TLS. Required for most hosted brokers on port 8883.",
+    );
+}
+
+fn mqtt_broker_fields(ui: &mut egui::Ui, s: &mut SettingsUi) {
+    text_line(
+        ui,
+        "Broker address",
+        &mut s.draft.mqtt.address,
+        &mut mark_on_change(&mut s.dirty, Section::Mqtt),
+        "Host[:port] of the MQTT broker. Leave empty to use the Meshtastic public server (mqtt.meshtastic.org).",
+    );
+    text_line(
+        ui,
+        "Username",
+        &mut s.draft.mqtt.username,
+        &mut mark_on_change(&mut s.dirty, Section::Mqtt),
+        "Broker username. For the public server leave empty to use the default.",
+    );
+    secret_line(
+        ui,
+        "Password",
+        &mut s.draft.mqtt.password,
+        &mut mark_on_change(&mut s.dirty, Section::Mqtt),
+        "Broker password. For the public server leave empty to use the default.",
+    );
+    text_line(
+        ui,
+        "Root topic",
+        &mut s.draft.mqtt.root,
+        &mut mark_on_change(&mut s.dirty, Section::Mqtt),
+        "Topic prefix for all published messages. Default is 'msh'. Change only if you host multiple meshes on the same broker.",
+    );
+}
+
+fn mqtt_payload_fields(ui: &mut egui::Ui, s: &mut SettingsUi, dirty: &mut bool) {
+    checkbox(
+        ui,
+        "Publish encrypted payloads",
+        &mut s.draft.mqtt.payload.encrypted,
+        dirty,
+        "When on, MQTT sees the same encrypted bytes the mesh sees — only holders of your channel PSK can decode. Off = broker sees plaintext (handy for your own dashboards).",
+    );
+    checkbox(
+        ui,
+        "Publish JSON too",
+        &mut s.draft.mqtt.payload.json,
+        dirty,
+        "Also publish a human-readable JSON version of each packet on a parallel topic. Convenient for integrations, but doubles airtime bandwidth on the MQTT side.",
+    );
+}
+
+fn mqtt_map_fields(ui: &mut egui::Ui, s: &mut SettingsUi, dirty: &mut bool) {
+    checkbox(
+        ui,
+        "Report to public map",
+        &mut s.draft.mqtt.map.enabled,
+        dirty,
+        "Periodically publish an unencrypted node-info packet so this device appears on map.meshtastic.org. Off by default — opt-in only.",
+    );
+    u32_drag(
+        ui,
+        "Publish every (s)",
+        &mut s.draft.mqtt.map.publish_interval_secs,
+        0..=86_400,
+        dirty,
+        "How often to send the map-report packet. 0 = firmware default (about once an hour). Respect the airtime budget.",
+    );
+    u32_drag(
+        ui,
+        "Position precision (bits)",
+        &mut s.draft.mqtt.map.position_precision,
+        0..=32,
+        dirty,
+        "Bits of latitude/longitude precision sent to the map. 32 = full, 0 = nothing. Lower values round coordinates; ~12-14 is a neighbourhood-level fuzz.",
+    );
+    checkbox(
+        ui,
+        "Share location on map",
+        &mut s.draft.mqtt.map.publish_location,
+        dirty,
+        "If off, the map-report omits position even when map reporting itself is on. Use if you want the node listed without pinpointing its location.",
+    );
+}
+
 // ---- Commit helper ----
 
 fn commit(
@@ -766,6 +899,7 @@ const fn section_label(section: Section) -> &'static str {
         Section::Network => "Network",
         Section::Display => "Display",
         Section::Bluetooth => "Bluetooth",
+        Section::Mqtt => "MQTT",
     }
 }
 
@@ -932,6 +1066,7 @@ fn sync_from_snapshot(snapshot: &DeviceSnapshot, s: &mut SettingsUi) {
         &mut s.draft.bluetooth,
         s.dirty.is(Section::Bluetooth),
     );
+    sync_section(snapshot.mqtt.as_ref(), &mut s.draft.mqtt, s.dirty.is(Section::Mqtt));
     if !s.dirty.is(Section::Position) {
         if let Some(pos) = snapshot.nodes.get(&snapshot.my_node).and_then(|n| n.position.as_ref()) {
             s.draft.fixed_lat = pos.latitude_deg;

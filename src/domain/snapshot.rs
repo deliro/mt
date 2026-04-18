@@ -2,8 +2,8 @@ use std::collections::HashMap;
 
 use crate::domain::channel::Channel;
 use crate::domain::config::{
-    BluetoothSettings, DeviceSettings, DisplaySettings, LoraSettings, NetworkSettings,
-    PositionSettings, PowerSettings,
+    BluetoothSettings, DeviceSettings, DisplaySettings, LoraSettings, MqttSettings,
+    NetworkSettings, PositionSettings, PowerSettings,
 };
 use crate::domain::ids::NodeId;
 use crate::domain::message::TextMessage;
@@ -26,6 +26,7 @@ pub struct DeviceSnapshot {
     pub network: Option<NetworkSettings>,
     pub display: Option<DisplaySettings>,
     pub bluetooth: Option<BluetoothSettings>,
+    pub mqtt: Option<MqttSettings>,
     pub stats: MeshStats,
 }
 

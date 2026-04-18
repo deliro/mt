@@ -2,8 +2,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::domain::channel::{Channel, ChannelRole};
 use crate::domain::config::{
-    BluetoothSettings, DeviceSettings, DisplaySettings, LoraSettings, NetworkSettings,
-    PositionSettings, PowerSettings,
+    BluetoothSettings, DeviceSettings, DisplaySettings, LoraSettings, MqttSettings,
+    NetworkSettings, PositionSettings, PowerSettings,
 };
 use crate::domain::ids::{BROADCAST_NODE, ChannelIndex, ConfigId, NodeId, PacketId};
 use crate::domain::message::{DeliveryState, Direction, Recipient, TextMessage};
@@ -27,8 +27,8 @@ pub fn fragments_from_radio(msg: meshtastic::FromRadio) -> Vec<HandshakeFragment
             vec![HandshakeFragment::ConfigComplete { id: ConfigId(id) }]
         }
         PayloadVariant::Packet(p) => packet_fragments(p),
-        PayloadVariant::ModuleConfig(_)
-        | PayloadVariant::Rebooted(_)
+        PayloadVariant::ModuleConfig(cfg) => module_config_fragments(cfg),
+        PayloadVariant::Rebooted(_)
         | PayloadVariant::QueueStatus(_)
         | PayloadVariant::XmodemPacket(_)
         | PayloadVariant::FileInfo(_)
@@ -160,6 +160,58 @@ fn channel_fragments(ch: meshtastic::Channel) -> Vec<HandshakeFragment> {
         downlink_enabled: downlink,
         position_precision,
     })]
+}
+
+fn module_config_fragments(cfg: meshtastic::ModuleConfig) -> Vec<HandshakeFragment> {
+    use meshtastic::module_config::PayloadVariant;
+    let Some(variant) = cfg.payload_variant else { return Vec::new() };
+    match variant {
+        PayloadVariant::Mqtt(m) => vec![HandshakeFragment::Mqtt(mqtt_from_proto(&m))],
+        PayloadVariant::Serial(_)
+        | PayloadVariant::ExternalNotification(_)
+        | PayloadVariant::StoreForward(_)
+        | PayloadVariant::RangeTest(_)
+        | PayloadVariant::Telemetry(_)
+        | PayloadVariant::CannedMessage(_)
+        | PayloadVariant::Audio(_)
+        | PayloadVariant::RemoteHardware(_)
+        | PayloadVariant::NeighborInfo(_)
+        | PayloadVariant::AmbientLighting(_)
+        | PayloadVariant::DetectionSensor(_)
+        | PayloadVariant::Paxcounter(_)
+        | PayloadVariant::Statusmessage(_)
+        | PayloadVariant::TrafficManagement(_)
+        | PayloadVariant::Tak(_) => Vec::new(),
+    }
+}
+
+pub fn mqtt_from_proto(m: &meshtastic::module_config::MqttConfig) -> MqttSettings {
+    use crate::domain::config::{MqttMapReport, MqttPayloadOptions};
+    let (pub_secs, pos_prec, report_loc) = m
+        .map_report_settings
+        .as_ref()
+        .map_or((0, 0, false), |s| {
+            (s.publish_interval_secs, s.position_precision, s.should_report_location)
+        });
+    MqttSettings {
+        enabled: m.enabled,
+        address: m.address.clone(),
+        username: m.username.clone(),
+        password: m.password.clone(),
+        root: m.root.clone(),
+        tls_enabled: m.tls_enabled,
+        proxy_to_client_enabled: m.proxy_to_client_enabled,
+        payload: MqttPayloadOptions {
+            encrypted: m.encryption_enabled,
+            json: m.json_enabled,
+        },
+        map: MqttMapReport {
+            enabled: m.map_reporting_enabled,
+            publish_location: report_loc,
+            publish_interval_secs: pub_secs,
+            position_precision: pos_prec,
+        },
+    }
 }
 
 fn config_fragments(cfg: meshtastic::Config) -> Vec<HandshakeFragment> {

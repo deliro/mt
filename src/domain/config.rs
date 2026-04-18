@@ -93,6 +93,33 @@ pub struct NetworkSettings {
     pub eth_enabled: bool,
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct MqttSettings {
+    pub enabled: bool,
+    pub address: String,
+    pub username: String,
+    pub password: String,
+    pub root: String,
+    pub tls_enabled: bool,
+    pub proxy_to_client_enabled: bool,
+    pub payload: MqttPayloadOptions,
+    pub map: MqttMapReport,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct MqttPayloadOptions {
+    pub encrypted: bool,
+    pub json: bool,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct MqttMapReport {
+    pub enabled: bool,
+    pub publish_location: bool,
+    pub publish_interval_secs: u32,
+    pub position_precision: u32,
+}
+
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 pub enum ScreenOrientation {
     #[default]

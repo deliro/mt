@@ -34,6 +34,7 @@ pub struct HandshakeAcc {
     pub network: Option<crate::domain::config::NetworkSettings>,
     pub display: Option<crate::domain::config::DisplaySettings>,
     pub bluetooth: Option<crate::domain::config::BluetoothSettings>,
+    pub mqtt: Option<crate::domain::config::MqttSettings>,
 }
 
 pub fn start_handshake(transport: TransportKind, config_id: ConfigId) -> SessionState {
@@ -53,6 +54,7 @@ pub fn start_handshake(transport: TransportKind, config_id: ConfigId) -> Session
         network: None,
         display: None,
         bluetooth: None,
+        mqtt: None,
     })
 }
 
@@ -69,6 +71,7 @@ pub enum HandshakeFragment {
     Network(crate::domain::config::NetworkSettings),
     Display(crate::domain::config::DisplaySettings),
     Bluetooth(crate::domain::config::BluetoothSettings),
+    Mqtt(crate::domain::config::MqttSettings),
     ConfigComplete { id: ConfigId },
     Message(TextMessage),
     MessageStateChanged { id: PacketId, state: DeliveryState },
@@ -141,6 +144,10 @@ fn apply_handshake(mut acc: HandshakeAcc, event: HandshakeFragment) -> SessionSt
             acc.bluetooth = Some(settings);
             SessionState::Handshake(acc)
         }
+        HandshakeFragment::Mqtt(settings) => {
+            acc.mqtt = Some(settings);
+            SessionState::Handshake(acc)
+        }
         HandshakeFragment::ConfigComplete { id } => {
             if id != acc.config_id {
                 return SessionState::Handshake(acc);
@@ -169,6 +176,7 @@ fn apply_handshake(mut acc: HandshakeAcc, event: HandshakeFragment) -> SessionSt
                 network: acc.network,
                 display: acc.display,
                 bluetooth: acc.bluetooth,
+                mqtt: acc.mqtt,
                 stats: crate::domain::stats::MeshStats::default(),
             })
         }
@@ -209,6 +217,10 @@ fn apply_ready(mut snap: DeviceSnapshot, event: HandshakeFragment) -> SessionSta
         }
         HandshakeFragment::Bluetooth(settings) => {
             snap.bluetooth = Some(settings);
+            SessionState::Ready(snap)
+        }
+        HandshakeFragment::Mqtt(settings) => {
+            snap.mqtt = Some(settings);
             SessionState::Ready(snap)
         }
         HandshakeFragment::Node(node) => {
