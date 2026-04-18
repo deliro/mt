@@ -20,4 +20,6 @@ pub enum Command {
     SetNetwork(NetworkSettings),
     SetDisplay(DisplaySettings),
     SetBluetooth(BluetoothSettings),
+    SetFixedPosition { latitude_deg: f64, longitude_deg: f64, altitude_m: i32 },
+    RemoveFixedPosition,
 }

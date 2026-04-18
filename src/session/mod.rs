@@ -83,7 +83,9 @@ impl DeviceSession {
                 | Command::SetPower(_)
                 | Command::SetNetwork(_)
                 | Command::SetDisplay(_)
-                | Command::SetBluetooth(_) => {}
+                | Command::SetBluetooth(_)
+                | Command::SetFixedPosition { .. }
+                | Command::RemoveFixedPosition => {}
             }
         }
     }
@@ -141,7 +143,9 @@ async fn open_with_cancel(
                     | Command::SetPower(_)
                     | Command::SetNetwork(_)
                     | Command::SetDisplay(_)
-                    | Command::SetBluetooth(_),
+                    | Command::SetBluetooth(_)
+                    | Command::SetFixedPosition { .. }
+                    | Command::RemoveFixedPosition,
                 ) => {
                     debug!("ignoring command while connecting");
                 }
@@ -413,6 +417,10 @@ async fn handle_config_command(
         Command::SetNetwork(s) => send_set_network(sink, my_node, &s).await,
         Command::SetDisplay(s) => send_set_display(sink, my_node, &s).await,
         Command::SetBluetooth(s) => send_set_bluetooth(sink, my_node, &s).await,
+        Command::SetFixedPosition { latitude_deg, longitude_deg, altitude_m } => {
+            send_set_fixed_position(sink, my_node, latitude_deg, longitude_deg, altitude_m).await
+        }
+        Command::RemoveFixedPosition => send_remove_fixed_position(sink, my_node).await,
         Command::Connect(_)
         | Command::Disconnect
         | Command::SendText { .. }
@@ -558,6 +566,41 @@ async fn send_set_bluetooth(
         fixed_pin: s.fixed_pin,
     };
     send_config(sink, my_node, meshtastic::config::PayloadVariant::Bluetooth(bt)).await
+}
+
+async fn send_set_fixed_position(
+    sink: &mut Pin<Box<impl futures::Sink<Vec<u8>, Error = crate::transport::TransportError> + ?Sized>>,
+    my_node: NodeId,
+    lat: f64,
+    lon: f64,
+    alt: i32,
+) -> Result<(), ConnectError> {
+    let lat_i = (lat * 1e7).round() as i32;
+    let lon_i = (lon * 1e7).round() as i32;
+    let pos = meshtastic::Position {
+        latitude_i: Some(lat_i),
+        longitude_i: Some(lon_i),
+        altitude: Some(alt),
+        ..Default::default()
+    };
+    let admin = meshtastic::AdminMessage {
+        payload_variant: Some(meshtastic::admin_message::PayloadVariant::SetFixedPosition(pos)),
+        ..Default::default()
+    };
+    send_admin(sink, my_node, admin).await
+}
+
+async fn send_remove_fixed_position(
+    sink: &mut Pin<Box<impl futures::Sink<Vec<u8>, Error = crate::transport::TransportError> + ?Sized>>,
+    my_node: NodeId,
+) -> Result<(), ConnectError> {
+    let admin = meshtastic::AdminMessage {
+        payload_variant: Some(meshtastic::admin_message::PayloadVariant::RemoveFixedPosition(
+            true,
+        )),
+        ..Default::default()
+    };
+    send_admin(sink, my_node, admin).await
 }
 
 async fn send_config(

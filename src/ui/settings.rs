@@ -41,6 +41,7 @@ pub struct SettingsUi {
     pub pending_clear: Option<PendingClear>,
     pub stored_messages: Option<i64>,
     pub stored_nodes: Option<i64>,
+    pub previous_fixed_enabled: bool,
 }
 
 #[derive(Default, Clone)]
@@ -50,6 +51,9 @@ pub struct Draft {
     pub lora: LoraSettings,
     pub device: DeviceSettings,
     pub position: PositionSettings,
+    pub fixed_lat: f64,
+    pub fixed_lon: f64,
+    pub fixed_alt: i32,
     pub power: PowerSettings,
     pub network: NetworkSettings,
     pub display: DisplaySettings,
@@ -144,16 +148,20 @@ fn save_row(ui: &mut egui::Ui, dirty: bool, label: &str, enabled: bool) -> bool 
 // ---- Owner ----
 
 fn owner_section(ui: &mut egui::Ui, s: &mut SettingsUi, cmd: &mpsc::UnboundedSender<Command>) {
-    ui.horizontal(|ui| {
-        ui.label("Long name:");
-        if ui.text_edit_singleline(&mut s.draft.long_name).changed() {
-            s.dirty.mark(Section::Owner);
-        }
-    });
+    text_line(
+        ui,
+        "Long name",
+        &mut s.draft.long_name,
+        &mut mark_on_change(&mut s.dirty, Section::Owner),
+        "Full display name for this node. Shown on other Meshtastic devices and in the mesh node list.",
+    );
     ui.horizontal(|ui| {
         ui.label("Short name:");
-        let resp =
-            ui.add(egui::TextEdit::singleline(&mut s.draft.short_name).desired_width(80.0));
+        let resp = ui
+            .add(egui::TextEdit::singleline(&mut s.draft.short_name).desired_width(80.0))
+            .on_hover_text(
+                "Up to 4 characters shown on device OLED / heard-from summaries. Often initials or a nickname.",
+            );
         if resp.changed() {
             s.dirty.mark(Section::Owner);
         }
@@ -179,12 +187,30 @@ fn owner_valid(s: &SettingsUi) -> bool {
         && s.draft.short_name.chars().count() <= 4
 }
 
+fn mark_on_change(dirty: &mut DirtySet, section: Section) -> impl FnMut() + '_ {
+    move || dirty.mark(section)
+}
+
 // ---- LoRa ----
 
 fn lora_section(ui: &mut egui::Ui, s: &mut SettingsUi, cmd: &mpsc::UnboundedSender<Command>) {
     let mut dirty = s.dirty.is(Section::Lora);
-    combo(ui, "Region", &mut s.draft.lora.region, REGION_CHOICES, region_label, &mut dirty);
-    checkbox(ui, "Use preset", &mut s.draft.lora.use_preset, &mut dirty);
+    combo(
+        ui,
+        "Region",
+        &mut s.draft.lora.region,
+        REGION_CHOICES,
+        region_label,
+        &mut dirty,
+        "Regulatory domain: must match where you physically operate. Controls legal frequencies and TX power. Default: Unset (device refuses to transmit until this is set).",
+    );
+    checkbox(
+        ui,
+        "Use preset",
+        &mut s.draft.lora.use_preset,
+        &mut dirty,
+        "When on, the modem preset picks bandwidth/spread-factor/coding-rate. Recommended. Turn off only if you know what you're doing.",
+    );
     combo(
         ui,
         "Modem preset",
@@ -192,10 +218,31 @@ fn lora_section(ui: &mut egui::Ui, s: &mut SettingsUi, cmd: &mpsc::UnboundedSend
         MODEM_PRESET_CHOICES,
         modem_preset_label,
         &mut dirty,
+        "Trade-off between range and throughput. LongFast is the mesh default and the most widely interoperable choice. Short* presets are faster but shorter range.",
     );
-    u8_slider(ui, "Max hops", &mut s.draft.lora.hop_limit, 1..=7, &mut dirty);
-    checkbox(ui, "TX enabled", &mut s.draft.lora.tx_enabled, &mut dirty);
-    i32_drag(ui, "TX power (dBm, 0=default)", &mut s.draft.lora.tx_power, 0..=30, &mut dirty);
+    u8_slider(
+        ui,
+        "Max hops",
+        &mut s.draft.lora.hop_limit,
+        1..=7,
+        &mut dirty,
+        "Maximum number of retransmissions a packet may make across the mesh. Higher = better coverage but more airtime cost. Default: 3. Max: 7.",
+    );
+    checkbox(
+        ui,
+        "TX enabled",
+        &mut s.draft.lora.tx_enabled,
+        &mut dirty,
+        "Transmit is enabled. Turn off only for receive-only setups, antenna tests, or when silence is required. Default: on.",
+    );
+    i32_drag(
+        ui,
+        "TX power (dBm, 0=default)",
+        &mut s.draft.lora.tx_power,
+        0..=30,
+        &mut dirty,
+        "Antenna output power in dBm. 0 keeps the regional default (the safe, compliant value). Set manually only if the hardware supports it and you need reduced power for lab/testing.",
+    );
     commit(s, Section::Lora, dirty, ui, "Save LoRa", cmd, |d| Command::SetLora(d.lora.clone()));
 }
 
@@ -210,6 +257,7 @@ fn device_section(ui: &mut egui::Ui, s: &mut SettingsUi, cmd: &mpsc::UnboundedSe
         DEVICE_ROLE_CHOICES,
         device_role_label,
         &mut dirty,
+        "Defines how the node participates in the mesh. 'Client' is the default for handhelds. 'Router'/'Repeater' should only be picked for fixed infrastructure nodes with good antennas — setting this incorrectly hurts the whole mesh.",
     );
     combo(
         ui,
@@ -218,6 +266,7 @@ fn device_section(ui: &mut egui::Ui, s: &mut SettingsUi, cmd: &mpsc::UnboundedSe
         REBROADCAST_CHOICES,
         rebroadcast_label,
         &mut dirty,
+        "Which packets this node will forward. 'All' is the default. 'LocalOnly' restricts forwarding to your private channels; 'KnownOnly' further restricts to NodeDB entries. Setting to 'None' is only valid for Sensor/Tracker/TakTracker roles.",
     );
     u32_drag(
         ui,
@@ -225,19 +274,35 @@ fn device_section(ui: &mut egui::Ui, s: &mut SettingsUi, cmd: &mpsc::UnboundedSe
         &mut s.draft.device.node_info_broadcast_secs,
         0..=86_400,
         &mut dirty,
+        "How often to broadcast our node identity (long/short name, etc.) to the mesh. Default: 10800 seconds (3 hours). Lower values give faster NodeDB sync at higher airtime cost.",
     );
-    checkbox(ui, "Disable triple click", &mut s.draft.device.disable_triple_click, &mut dirty);
-    checkbox(ui, "LED heartbeat disabled", &mut s.draft.device.led_heartbeat_disabled, &mut dirty);
-    text_line(ui, "Timezone (POSIX TZ)", &mut s.draft.device.tzdef, &mut dirty);
-    commit(
-        s,
-        Section::Device,
-        dirty,
+    checkbox(
         ui,
-        "Save Device",
-        cmd,
-        |d| Command::SetDevice(d.device.clone()),
+        "Disable triple click",
+        &mut s.draft.device.disable_triple_click,
+        &mut dirty,
+        "Disables the triple-press-of-user-button shortcut that toggles GPS power. Turn on if accidental presses keep disabling GPS. Default: off.",
     );
+    checkbox(
+        ui,
+        "LED heartbeat disabled",
+        &mut s.draft.device.led_heartbeat_disabled,
+        &mut dirty,
+        "Turns off the default blinking LED (LED_PIN) used as a liveness indicator. Useful for stealth or battery savings. Default: off.",
+    );
+    text_line(
+        ui,
+        "Timezone (POSIX TZ)",
+        &mut s.draft.device.tzdef,
+        &mut mark_on_change(&mut s.dirty, Section::Device),
+        "POSIX timezone string for the device clock (e.g. 'EET-2EEST,M3.5.0/3,M10.5.0/4'). Leave empty to use UTC. See github.com/nayarsystems/posix_tz_db.",
+    );
+    let dirty = s.dirty.is(Section::Device);
+    if save_row(ui, dirty, "Save Device", dirty) {
+        let _ = cmd.send(Command::SetDevice(s.draft.device.clone()));
+        s.dirty.clear(Section::Device);
+        s.last_save = Some("Device".into());
+    }
 }
 
 // ---- Position ----
@@ -248,15 +313,38 @@ fn position_section(
     cmd: &mpsc::UnboundedSender<Command>,
 ) {
     let mut dirty = s.dirty.is(Section::Position);
-    u32_drag(ui, "Broadcast (s)", &mut s.draft.position.broadcast_secs, 0..=86_400, &mut dirty);
-    checkbox(ui, "Smart broadcast", &mut s.draft.position.smart_enabled, &mut dirty);
-    checkbox(ui, "Fixed position", &mut s.draft.position.fixed_position, &mut dirty);
+    u32_drag(
+        ui,
+        "Broadcast (s)",
+        &mut s.draft.position.broadcast_secs,
+        0..=86_400,
+        &mut dirty,
+        "Interval between position broadcasts on the mesh, if the position changed meaningfully. Default: 900 seconds (15 minutes). 0 disables regular broadcasts.",
+    );
+    checkbox(
+        ui,
+        "Smart broadcast",
+        &mut s.draft.position.smart_enabled,
+        &mut dirty,
+        "Adaptive broadcast: skip updates when stationary, send more often when moving. Recommended for handhelds. Default: on.",
+    );
+    checkbox(
+        ui,
+        "Fixed position",
+        &mut s.draft.position.fixed_position,
+        &mut dirty,
+        "Treat this node as stationary at the coordinates below. The GPS is not required — the device broadcasts the saved coordinates. Useful for fixed base stations and repeaters.",
+    );
+    if s.draft.position.fixed_position {
+        render_fixed_position(ui, s, &mut dirty);
+    }
     u32_drag(
         ui,
         "GPS update interval (s)",
         &mut s.draft.position.gps_update_interval,
         0..=3_600,
         &mut dirty,
+        "How often the GPS module tries to compute a fix (seconds). 0 = default of 30s. Very large values (e.g. 86400) keep the GPS off except at boot.",
     );
     combo(
         ui,
@@ -265,6 +353,7 @@ fn position_section(
         GPS_MODE_CHOICES,
         gps_mode_label,
         &mut dirty,
+        "Whether GPS is powered on. Pick 'Disabled' for indoor/stationary use with Fixed position, 'Enabled' for mobile, 'Not present' for boards without a GPS module.",
     );
     u32_drag(
         ui,
@@ -272,6 +361,7 @@ fn position_section(
         &mut s.draft.position.smart_min_distance_m,
         0..=10_000,
         &mut dirty,
+        "Minimum movement in meters before smart-broadcast will send an update. 0 uses firmware default. Only matters when Smart broadcast is on.",
     );
     u32_drag(
         ui,
@@ -279,29 +369,94 @@ fn position_section(
         &mut s.draft.position.smart_min_interval_secs,
         0..=3_600,
         &mut dirty,
+        "Minimum seconds between smart-broadcast updates, even when moving. 0 uses firmware default. Only matters when Smart broadcast is on.",
     );
-    commit(
-        s,
-        Section::Position,
-        dirty,
-        ui,
-        "Save Position",
-        cmd,
-        |d| Command::SetPosition(d.position.clone()),
-    );
+    s.dirty.sections.extend(dirty.then_some(Section::Position));
+    let dirty = s.dirty.is(Section::Position);
+    if save_row(ui, dirty, "Save Position", dirty) {
+        save_position(s, cmd);
+    }
+}
+
+fn render_fixed_position(ui: &mut egui::Ui, s: &mut SettingsUi, dirty: &mut bool) {
+    ui.indent("fixed_pos", |ui| {
+        ui.horizontal(|ui| {
+            ui.label("Latitude:");
+            let resp = ui
+                .add(
+                    egui::DragValue::new(&mut s.draft.fixed_lat)
+                        .range(-90.0..=90.0)
+                        .speed(0.0001)
+                        .max_decimals(6)
+                        .suffix("°"),
+                )
+                .on_hover_text("Decimal degrees, positive north.");
+            if resp.changed() {
+                *dirty = true;
+            }
+        });
+        ui.horizontal(|ui| {
+            ui.label("Longitude:");
+            let resp = ui
+                .add(
+                    egui::DragValue::new(&mut s.draft.fixed_lon)
+                        .range(-180.0..=180.0)
+                        .speed(0.0001)
+                        .max_decimals(6)
+                        .suffix("°"),
+                )
+                .on_hover_text("Decimal degrees, positive east.");
+            if resp.changed() {
+                *dirty = true;
+            }
+        });
+        ui.horizontal(|ui| {
+            ui.label("Altitude:");
+            let resp = ui
+                .add(egui::DragValue::new(&mut s.draft.fixed_alt).range(-500..=9_000).suffix(" m"))
+                .on_hover_text("Meters above mean sea level. Set 0 if unknown.");
+            if resp.changed() {
+                *dirty = true;
+            }
+        });
+        ui.weak("Coordinates are sent via set_fixed_position on save.");
+    });
+}
+
+fn save_position(s: &mut SettingsUi, cmd: &mpsc::UnboundedSender<Command>) {
+    let _ = cmd.send(Command::SetPosition(s.draft.position.clone()));
+    if s.draft.position.fixed_position {
+        let _ = cmd.send(Command::SetFixedPosition {
+            latitude_deg: s.draft.fixed_lat,
+            longitude_deg: s.draft.fixed_lon,
+            altitude_m: s.draft.fixed_alt,
+        });
+    } else if s.previous_fixed_enabled {
+        let _ = cmd.send(Command::RemoveFixedPosition);
+    }
+    s.previous_fixed_enabled = s.draft.position.fixed_position;
+    s.dirty.clear(Section::Position);
+    s.last_save = Some("Position".into());
 }
 
 // ---- Power ----
 
 fn power_section(ui: &mut egui::Ui, s: &mut SettingsUi, cmd: &mpsc::UnboundedSender<Command>) {
     let mut dirty = s.dirty.is(Section::Power);
-    checkbox(ui, "Power saving", &mut s.draft.power.is_power_saving, &mut dirty);
+    checkbox(
+        ui,
+        "Power saving",
+        &mut s.draft.power.is_power_saving,
+        &mut dirty,
+        "Aggressively sleeps everything including the LoRa radio when idle. Only safe for Sensor/Tracker roles. Do NOT use if you rely on the phone app staying connected.",
+    );
     u32_drag(
         ui,
         "Shutdown after (s, 0=off)",
         &mut s.draft.power.on_battery_shutdown_after_secs,
         0..=604_800,
         &mut dirty,
+        "Automatically powers off this many seconds after external power is removed. 0 disables auto-shutdown. Useful for trackers that should not drain a small battery.",
     );
     u32_drag(
         ui,
@@ -309,9 +464,24 @@ fn power_section(ui: &mut egui::Ui, s: &mut SettingsUi, cmd: &mpsc::UnboundedSen
         &mut s.draft.power.wait_bluetooth_secs,
         0..=3_600,
         &mut dirty,
+        "How long to keep BLE awake after activity before sleeping it. 0 uses default (1 minute). ESP32 only.",
     );
-    u32_drag(ui, "Light sleep (s)", &mut s.draft.power.ls_secs, 0..=86_400, &mut dirty);
-    u32_drag(ui, "Min wake (s)", &mut s.draft.power.min_wake_secs, 0..=3_600, &mut dirty);
+    u32_drag(
+        ui,
+        "Light sleep (s)",
+        &mut s.draft.power.ls_secs,
+        0..=86_400,
+        &mut dirty,
+        "Seconds of idle before entering light sleep (CPU paused, LoRa on, BLE off, GPS on). 0 = default 300s. ESP32 only.",
+    );
+    u32_drag(
+        ui,
+        "Min wake (s)",
+        &mut s.draft.power.min_wake_secs,
+        0..=3_600,
+        &mut dirty,
+        "Once woken from light sleep by a LoRa packet, stay awake at least this long before sleeping again. 0 = default 10s.",
+    );
     commit(
         s,
         Section::Power,
@@ -331,20 +501,47 @@ fn network_section(
     cmd: &mpsc::UnboundedSender<Command>,
 ) {
     let mut dirty = s.dirty.is(Section::Network);
-    checkbox(ui, "Wi-Fi enabled", &mut s.draft.network.wifi_enabled, &mut dirty);
-    text_line(ui, "SSID", &mut s.draft.network.wifi_ssid, &mut dirty);
-    secret_line(ui, "PSK", &mut s.draft.network.wifi_psk, &mut dirty);
-    text_line(ui, "NTP server", &mut s.draft.network.ntp_server, &mut dirty);
-    checkbox(ui, "Ethernet enabled", &mut s.draft.network.eth_enabled, &mut dirty);
-    commit(
-        s,
-        Section::Network,
-        dirty,
+    checkbox(
         ui,
-        "Save Network",
-        cmd,
-        |d| Command::SetNetwork(d.network.clone()),
+        "Wi-Fi enabled",
+        &mut s.draft.network.wifi_enabled,
+        &mut dirty,
+        "Enables the Wi-Fi radio on supported boards. Note: enabling Wi-Fi disables Bluetooth on the same device.",
     );
+    text_line(
+        ui,
+        "SSID",
+        &mut s.draft.network.wifi_ssid,
+        &mut mark_on_change(&mut s.dirty, Section::Network),
+        "Network name to join. The Meshtastic firmware does not expose a scan of nearby networks over the phone API — type the SSID manually.",
+    );
+    secret_line(
+        ui,
+        "PSK",
+        &mut s.draft.network.wifi_psk,
+        &mut mark_on_change(&mut s.dirty, Section::Network),
+        "Wi-Fi password (WPA2). Stored on device; we never log it.",
+    );
+    text_line(
+        ui,
+        "NTP server",
+        &mut s.draft.network.ntp_server,
+        &mut mark_on_change(&mut s.dirty, Section::Network),
+        "Host used to set device clock over Wi-Fi. Default: meshtastic.pool.ntp.org.",
+    );
+    checkbox(
+        ui,
+        "Ethernet enabled",
+        &mut s.draft.network.eth_enabled,
+        &mut dirty,
+        "Enables the Ethernet interface on boards that have it (e.g. RAK Wireless gateway).",
+    );
+    let dirty = s.dirty.is(Section::Network);
+    if save_row(ui, dirty, "Save Network", dirty) {
+        let _ = cmd.send(Command::SetNetwork(s.draft.network.clone()));
+        s.dirty.clear(Section::Network);
+        s.last_save = Some("Network".into());
+    }
 }
 
 // ---- Display ----
@@ -361,6 +558,7 @@ fn display_section(
         &mut s.draft.display.screen_on_secs,
         0..=3_600,
         &mut dirty,
+        "How long the OLED stays on after a button press or incoming message. 0 = default 60s. Use a very large value to keep it always on (drains battery).",
     );
     u32_drag(
         ui,
@@ -368,6 +566,7 @@ fn display_section(
         &mut s.draft.display.auto_carousel_secs,
         0..=3_600,
         &mut dirty,
+        "Automatically rotate through screens every N seconds. 0 disables. Helpful for buttonless boards.",
     );
     combo(
         ui,
@@ -376,6 +575,7 @@ fn display_section(
         ORIENTATION_CHOICES,
         orientation_label,
         &mut dirty,
+        "Flip the screen vertically for upside-down mounting.",
     );
     combo(
         ui,
@@ -384,6 +584,7 @@ fn display_section(
         DISPLAY_UNITS_CHOICES,
         display_units_label,
         &mut dirty,
+        "Metric (meters, °C) or Imperial (feet, °F).",
     );
     combo(
         ui,
@@ -392,9 +593,22 @@ fn display_section(
         CLOCK_CHOICES,
         clock_label,
         &mut dirty,
+        "24-hour (default, international) or 12-hour AM/PM.",
     );
-    checkbox(ui, "Heading bold", &mut s.draft.display.heading_bold, &mut dirty);
-    checkbox(ui, "Wake on tap/motion", &mut s.draft.display.wake_on_tap_or_motion, &mut dirty);
+    checkbox(
+        ui,
+        "Heading bold",
+        &mut s.draft.display.heading_bold,
+        &mut dirty,
+        "Render the first line of each screen in a bolder style.",
+    );
+    checkbox(
+        ui,
+        "Wake on tap/motion",
+        &mut s.draft.display.wake_on_tap_or_motion,
+        &mut dirty,
+        "Wake the OLED when the accelerometer detects a tap or motion. Requires a supported IMU chip on the board.",
+    );
     commit(
         s,
         Section::Display,
@@ -414,7 +628,13 @@ fn bluetooth_section(
     cmd: &mpsc::UnboundedSender<Command>,
 ) {
     let mut dirty = s.dirty.is(Section::Bluetooth);
-    checkbox(ui, "Enabled", &mut s.draft.bluetooth.enabled, &mut dirty);
+    checkbox(
+        ui,
+        "Enabled",
+        &mut s.draft.bluetooth.enabled,
+        &mut dirty,
+        "Enable the BLE radio. Required for the phone app to talk to the device.",
+    );
     combo(
         ui,
         "Pairing mode",
@@ -422,8 +642,16 @@ fn bluetooth_section(
         PAIRING_MODE_CHOICES,
         pairing_mode_label,
         &mut dirty,
+        "RandomPin: device shows a fresh 6-digit PIN on screen each pair (recommended). FixedPin: always uses the PIN below (easier but weaker). NoPin: no PIN at all (insecure, legacy).",
     );
-    u32_drag(ui, "Fixed PIN", &mut s.draft.bluetooth.fixed_pin, 0..=999_999, &mut dirty);
+    u32_drag(
+        ui,
+        "Fixed PIN",
+        &mut s.draft.bluetooth.fixed_pin,
+        0..=999_999,
+        &mut dirty,
+        "6-digit PIN used when Pairing mode is FixedPin. Ignored otherwise.",
+    );
     commit(
         s,
         Section::Bluetooth,
@@ -479,42 +707,73 @@ fn combo<T: Copy + PartialEq>(
     choices: &[T],
     to_label: impl Fn(T) -> &'static str,
     dirty: &mut bool,
+    hint: &str,
 ) {
     ui.horizontal(|ui| {
-        ui.label(format!("{label}:"));
-        egui::ComboBox::from_id_salt(label).selected_text(to_label(*value)).show_ui(ui, |ui| {
-            for choice in choices {
-                if ui.selectable_value(value, *choice, to_label(*choice)).changed() {
-                    *dirty = true;
+        ui.label(label).on_hover_text(hint);
+        let resp = egui::ComboBox::from_id_salt(label)
+            .selected_text(to_label(*value))
+            .show_ui(ui, |ui| {
+                for choice in choices {
+                    if ui.selectable_value(value, *choice, to_label(*choice)).changed() {
+                        *dirty = true;
+                    }
                 }
-            }
-        });
-    });
-}
-
-fn checkbox(ui: &mut egui::Ui, label: &str, value: &mut bool, dirty: &mut bool) {
-    ui.horizontal(|ui| {
-        ui.label(format!("{label}:"));
-        if ui.checkbox(value, "").changed() {
-            *dirty = true;
+            })
+            .response;
+        if !hint.is_empty() {
+            let _ = resp.on_hover_text(hint);
         }
     });
 }
 
-fn text_line(ui: &mut egui::Ui, label: &str, value: &mut String, dirty: &mut bool) {
+fn checkbox(ui: &mut egui::Ui, label: &str, value: &mut bool, dirty: &mut bool, hint: &str) {
     ui.horizontal(|ui| {
-        ui.label(format!("{label}:"));
-        if ui.text_edit_singleline(value).changed() {
+        ui.label(label).on_hover_text(hint);
+        let resp = ui.checkbox(value, "");
+        if resp.changed() {
             *dirty = true;
+        }
+        if !hint.is_empty() {
+            let _ = resp.on_hover_text(hint);
         }
     });
 }
 
-fn secret_line(ui: &mut egui::Ui, label: &str, value: &mut String, dirty: &mut bool) {
+fn text_line(
+    ui: &mut egui::Ui,
+    label: &str,
+    value: &mut String,
+    mut on_change: impl FnMut(),
+    hint: &str,
+) {
     ui.horizontal(|ui| {
-        ui.label(format!("{label}:"));
-        if ui.add(egui::TextEdit::singleline(value).password(true)).changed() {
-            *dirty = true;
+        ui.label(label).on_hover_text(hint);
+        let resp = ui.text_edit_singleline(value);
+        if resp.changed() {
+            on_change();
+        }
+        if !hint.is_empty() {
+            let _ = resp.on_hover_text(hint);
+        }
+    });
+}
+
+fn secret_line(
+    ui: &mut egui::Ui,
+    label: &str,
+    value: &mut String,
+    mut on_change: impl FnMut(),
+    hint: &str,
+) {
+    ui.horizontal(|ui| {
+        ui.label(label).on_hover_text(hint);
+        let resp = ui.add(egui::TextEdit::singleline(value).password(true));
+        if resp.changed() {
+            on_change();
+        }
+        if !hint.is_empty() {
+            let _ = resp.on_hover_text(hint);
         }
     });
 }
@@ -525,11 +784,16 @@ fn u32_drag(
     value: &mut u32,
     range: std::ops::RangeInclusive<u32>,
     dirty: &mut bool,
+    hint: &str,
 ) {
     ui.horizontal(|ui| {
-        ui.label(format!("{label}:"));
-        if ui.add(egui::DragValue::new(value).range(range)).changed() {
+        ui.label(label).on_hover_text(hint);
+        let resp = ui.add(egui::DragValue::new(value).range(range));
+        if resp.changed() {
             *dirty = true;
+        }
+        if !hint.is_empty() {
+            let _ = resp.on_hover_text(hint);
         }
     });
 }
@@ -540,11 +804,16 @@ fn i32_drag(
     value: &mut i32,
     range: std::ops::RangeInclusive<i32>,
     dirty: &mut bool,
+    hint: &str,
 ) {
     ui.horizontal(|ui| {
-        ui.label(format!("{label}:"));
-        if ui.add(egui::DragValue::new(value).range(range)).changed() {
+        ui.label(label).on_hover_text(hint);
+        let resp = ui.add(egui::DragValue::new(value).range(range));
+        if resp.changed() {
             *dirty = true;
+        }
+        if !hint.is_empty() {
+            let _ = resp.on_hover_text(hint);
         }
     });
 }
@@ -555,14 +824,19 @@ fn u8_slider(
     value: &mut u8,
     range: std::ops::RangeInclusive<u8>,
     dirty: &mut bool,
+    hint: &str,
 ) {
     ui.horizontal(|ui| {
-        ui.label(format!("{label}:"));
+        ui.label(label).on_hover_text(hint);
         let mut tmp = u32::from(*value);
         let (start, end) = (u32::from(*range.start()), u32::from(*range.end()));
-        if ui.add(egui::Slider::new(&mut tmp, start..=end)).changed() {
+        let resp = ui.add(egui::Slider::new(&mut tmp, start..=end));
+        if resp.changed() {
             *value = u8::try_from(tmp).unwrap_or(*value);
             *dirty = true;
+        }
+        if !hint.is_empty() {
+            let _ = resp.on_hover_text(hint);
         }
     });
 }
@@ -587,6 +861,15 @@ fn sync_from_snapshot(snapshot: &DeviceSnapshot, s: &mut SettingsUi) {
         &mut s.draft.bluetooth,
         s.dirty.is(Section::Bluetooth),
     );
+    if !s.dirty.is(Section::Position) {
+        if let Some(pos) = snapshot.nodes.get(&snapshot.my_node).and_then(|n| n.position.as_ref()) {
+            s.draft.fixed_lat = pos.latitude_deg;
+            s.draft.fixed_lon = pos.longitude_deg;
+            s.draft.fixed_alt = pos.altitude_m.unwrap_or(0);
+        }
+        s.previous_fixed_enabled =
+            snapshot.position.as_ref().is_some_and(|p| p.fixed_position);
+    }
 }
 
 fn sync_section<T: Clone>(src: Option<&T>, draft: &mut T, dirty: bool) {
