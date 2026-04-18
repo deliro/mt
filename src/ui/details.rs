@@ -25,6 +25,7 @@ pub fn render_overlay(
 
     let mut open = true;
     let mut action: Option<Action> = None;
+    let unknown = !state.snapshot.nodes.contains_key(&id);
     egui::Window::new(title).open(&mut open).collapsible(false).resizable(false).show(ctx, |ui| {
         match state.snapshot.nodes.get(&id) {
             Some(node) => {
@@ -34,10 +35,19 @@ pub fn render_overlay(
                 render_traceroute_section(ui, id, &state.traceroutes, &state.snapshot);
             }
             None => {
-                ui.label(format!("No data yet for !{:08x}", id.0));
+                ui.horizontal(|ui| {
+                    ui.spinner();
+                    ui.label(format!(
+                        "No info yet for !{:08x} — asked the mesh for a NodeInfo reply.",
+                        id.0,
+                    ));
+                });
             }
         }
     });
+    if unknown && id.0 != 0 && id != state.snapshot.my_node && state.probed_nodes.insert(id) {
+        let _ = cmd.send(Command::RequestNodeInfo { node: id });
+    }
 
     if let Some(action) = action {
         apply_action(state, cmd, id, action);

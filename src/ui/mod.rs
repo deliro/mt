@@ -52,6 +52,7 @@ pub struct AppState {
     pub channels_ui: channels::ChannelsUi,
     pub traceroutes: TracerouteUi,
     pub remote_admin: remote_admin::RemoteAdminUi,
+    pub probed_nodes: std::collections::HashSet<NodeId>,
 }
 
 #[derive(Default)]
@@ -194,7 +195,25 @@ impl App {
         {
             warn!(%e, "persist message failed");
         }
+        let from = m.from;
         self.state.snapshot.upsert_message(m);
+        self.probe_node_if_unknown(from);
+    }
+
+    /// If the sender is a ghost in our `NodeDB`, fire one `NodeInfo` request over
+    /// the mesh. The reply flows back as a normal `NodeUpdated` event and the
+    /// chat auto-relabels from `!xxxxxxxx` to the node's display name.
+    fn probe_node_if_unknown(&mut self, id: NodeId) {
+        if id.0 == 0 || id == self.state.snapshot.my_node {
+            return;
+        }
+        if self.state.snapshot.nodes.contains_key(&id) {
+            return;
+        }
+        if !self.state.probed_nodes.insert(id) {
+            return;
+        }
+        let _ = self.cmd_tx.send(Command::RequestNodeInfo { node: id });
     }
 
     fn refresh_storage_counts(&mut self) {

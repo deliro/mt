@@ -127,7 +127,8 @@ impl DeviceSession {
                 | Command::SetExtNotif(_)
                 | Command::SetCanned(_)
                 | Command::SetRangeTest(_)
-                | Command::RemoteAdmin { .. } => {}
+                | Command::RemoteAdmin { .. }
+                | Command::RequestNodeInfo { .. } => {}
             }
         }
     }
@@ -201,7 +202,8 @@ async fn open_with_cancel(
                     | Command::SetExtNotif(_)
                     | Command::SetCanned(_)
                     | Command::SetRangeTest(_)
-                    | Command::RemoteAdmin { .. },
+                    | Command::RemoteAdmin { .. }
+                    | Command::RequestNodeInfo { .. },
                 ) => {
                     debug!("ignoring command while connecting");
                 }
@@ -574,8 +576,43 @@ async fn dispatch_config_command(
         Command::SetIgnored { node, ignored } => send_ignored(sink, my_node, node, ignored).await,
         Command::SetChannel(channel) => send_set_channel(sink, my_node, &channel).await,
         Command::SetSecurity(s) => send_set_security(sink, my_node, &s).await,
+        Command::RequestNodeInfo { node } => send_node_info_probe(sink, my_node, node).await,
         module => dispatch_module_command(module, my_node, sink).await,
     }
+}
+
+async fn send_node_info_probe(
+    sink: SinkRef<'_, impl FrameSink + ?Sized>,
+    my_node: NodeId,
+    target: NodeId,
+) -> Result<(), ConnectError> {
+    let user = meshtastic::User::default();
+    let mut payload = Vec::with_capacity(user.encoded_len());
+    user.encode(&mut payload)?;
+    let data = meshtastic::Data {
+        portnum: meshtastic::PortNum::NodeinfoApp as i32,
+        payload,
+        want_response: true,
+        ..Default::default()
+    };
+    let packet = meshtastic::MeshPacket {
+        from: my_node.0,
+        to: target.0,
+        channel: 0,
+        id: PacketId::random().0,
+        want_ack: false,
+        hop_limit: TRACEROUTE_HOP_LIMIT,
+        hop_start: TRACEROUTE_HOP_LIMIT,
+        payload_variant: Some(meshtastic::mesh_packet::PayloadVariant::Decoded(data)),
+        ..Default::default()
+    };
+    let msg = meshtastic::ToRadio {
+        payload_variant: Some(meshtastic::to_radio::PayloadVariant::Packet(packet)),
+    };
+    let mut buf = Vec::with_capacity(msg.encoded_len());
+    msg.encode(&mut buf)?;
+    sink.send(buf).await?;
+    Ok(())
 }
 
 async fn dispatch_module_command(
@@ -611,7 +648,8 @@ async fn dispatch_module_command(
         | Command::SetFavorite { .. }
         | Command::SetIgnored { .. }
         | Command::SetChannel(_)
-        | Command::SetSecurity(_) => Ok(()),
+        | Command::SetSecurity(_)
+        | Command::RequestNodeInfo { .. } => Ok(()),
     }
 }
 

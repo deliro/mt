@@ -79,6 +79,7 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 rand = "0.8"
 serde = { version = "1", features = ["derive"] }
 thiserror = "1"
+time = { version = "0.3", features = ["formatting", "local-offset", "macros"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "io-util", "net", "fs"] }
 tokio-util = { version = "0.7", features = ["codec"] }
 toml = "0.8"

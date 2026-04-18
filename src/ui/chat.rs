@@ -1,3 +1,4 @@
+use std::sync::OnceLock;
 use std::time::SystemTime;
 
 use eframe::egui;
@@ -14,6 +15,8 @@ pub struct ChatUi {
     pub active_channel: u8,
     pub composer_text: String,
     pub dm_target: Option<NodeId>,
+    pub last_seen_count: usize,
+    pub follow_bottom: bool,
 }
 
 pub fn render_messages(ui: &mut egui::Ui, state: &mut AppState) {
@@ -79,44 +82,83 @@ fn message_list(ui: &mut egui::Ui, state: &mut AppState, active: ChannelIndex) {
         state.snapshot.messages.iter().filter(|m| m.channel == active).cloned().collect();
 
     let mut open_detail: Option<NodeId> = None;
+    let new_messages = messages.len() > state.chat_ui.last_seen_count;
+    state.chat_ui.last_seen_count = messages.len();
+    if new_messages {
+        state.chat_ui.follow_bottom = true;
+    }
+    let should_jump = state.chat_ui.follow_bottom;
 
-    egui::ScrollArea::vertical().stick_to_bottom(true).auto_shrink([false; 2]).show(ui, |ui| {
-        if messages.is_empty() {
-            ui.vertical_centered(|ui| {
-                ui.add_space(40.0);
-                ui.weak("No messages yet on this channel.");
-            });
-            return;
-        }
-        for m in messages {
-            ui.horizontal_wrapped(|ui| {
-                ui.monospace(format_time(m.received_at));
-                let sender_name = node_display_name(state, m.from);
-                let sender_text = match m.direction {
-                    Direction::Outgoing => {
-                        egui::RichText::new(sender_name).color(egui::Color32::LIGHT_BLUE)
-                    }
-                    Direction::Incoming => egui::RichText::new(sender_name).strong(),
-                };
-                if clickable_label(ui, sender_text) {
-                    open_detail = Some(m.from);
-                }
-                if let Recipient::Node(target) = m.to {
-                    let label = format!("-> {}", node_display_name(state, target));
-                    if clickable_label(ui, egui::RichText::new(label)) {
-                        open_detail = Some(target);
-                    }
-                }
-                ui.label(&m.text);
-                if m.direction == Direction::Outgoing {
-                    render_delivery(ui, &m.state);
-                }
-            });
-        }
-    });
+    let scroll = egui::ScrollArea::vertical()
+        .id_salt(("chat_scroll", active.get()))
+        .auto_shrink([false; 2])
+        .stick_to_bottom(true);
+    let out = scroll.show(ui, |ui| render_message_rows(ui, state, &messages, &mut open_detail));
+
+    if should_jump {
+        // Manual forcing: the `stick_to_bottom` heuristic sometimes unsticks
+        // when wrapping reflows (e.g. the node-name column grows after a
+        // NodeInfo arrives and changes line widths). Explicitly nudging to the
+        // bottom avoids the chat from drifting upwards after events.
+        ui.scroll_to_rect(
+            egui::Rect::from_min_size(
+                egui::pos2(0.0, f32::MAX - 1.0),
+                egui::vec2(1.0, 1.0),
+            ),
+            Some(egui::Align::BOTTOM),
+        );
+        state.chat_ui.follow_bottom = false;
+    }
+
+    // If user scrolls up manually, respect that until a new message arrives.
+    let at_bottom =
+        out.state.offset.y >= out.content_size.y - out.inner_rect.height() - 2.0;
+    if !at_bottom {
+        state.chat_ui.follow_bottom = false;
+    }
 
     if let Some(id) = open_detail {
         state.detail_node = Some(id);
+    }
+}
+
+fn render_message_rows(
+    ui: &mut egui::Ui,
+    state: &AppState,
+    messages: &[crate::domain::message::TextMessage],
+    open_detail: &mut Option<NodeId>,
+) {
+    if messages.is_empty() {
+        ui.vertical_centered(|ui| {
+            ui.add_space(40.0);
+            ui.weak("No messages yet on this channel.");
+        });
+        return;
+    }
+    for m in messages {
+        ui.horizontal_wrapped(|ui| {
+            ui.monospace(format_time(m.received_at));
+            let sender_name = node_display_name(state, m.from);
+            let sender_text = match m.direction {
+                Direction::Outgoing => {
+                    egui::RichText::new(sender_name).color(egui::Color32::LIGHT_BLUE)
+                }
+                Direction::Incoming => egui::RichText::new(sender_name).strong(),
+            };
+            if clickable_label(ui, sender_text) {
+                *open_detail = Some(m.from);
+            }
+            if let Recipient::Node(target) = m.to {
+                let label = format!("-> {}", node_display_name(state, target));
+                if clickable_label(ui, egui::RichText::new(label)) {
+                    *open_detail = Some(target);
+                }
+            }
+            ui.label(&m.text);
+            if m.direction == Direction::Outgoing {
+                render_delivery(ui, &m.state);
+            }
+        });
     }
 }
 
@@ -211,9 +253,20 @@ fn node_label(node: &crate::domain::node::Node) -> String {
 }
 
 fn format_time(t: SystemTime) -> String {
-    let secs = t.duration_since(SystemTime::UNIX_EPOCH).map_or(0, |d| d.as_secs());
-    let h = secs.div_euclid(3_600).rem_euclid(24);
-    let m = secs.div_euclid(60).rem_euclid(60);
-    let s = secs.rem_euclid(60);
-    format!("{h:02}:{m:02}:{s:02}")
+    let dt = time::OffsetDateTime::from(t).to_offset(local_offset());
+    format!("{:02}:{:02}:{:02}", dt.hour(), dt.minute(), dt.second())
+}
+
+/// Cached local-timezone offset.
+///
+/// `time::UtcOffset::current_local_offset()` can fail on Linux once worker
+/// threads exist (it reads `/etc/localtime` via non-reentrant libc). Stashing
+/// the result on first call — ideally from `main` before spawning threads —
+/// keeps the UI deterministic; we fall back to UTC if the probe returned
+/// `Err`.
+pub fn local_offset() -> time::UtcOffset {
+    static OFFSET: OnceLock<time::UtcOffset> = OnceLock::new();
+    *OFFSET.get_or_init(|| {
+        time::UtcOffset::current_local_offset().unwrap_or(time::UtcOffset::UTC)
+    })
 }

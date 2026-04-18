@@ -39,6 +39,7 @@ pub enum Command {
     SetIgnored { node: crate::domain::ids::NodeId, ignored: bool },
     Traceroute { node: crate::domain::ids::NodeId },
     SetChannel(Channel),
+    RequestNodeInfo { node: crate::domain::ids::NodeId },
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]

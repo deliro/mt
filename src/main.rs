@@ -15,6 +15,10 @@ use tokio::sync::mpsc;
 use tracing_subscriber::EnvFilter;
 
 fn main() -> eframe::Result<()> {
+    // Must run before any other thread is spawned: on Linux the localtime
+    // probe is only sound in a single-threaded process.
+    let _ = mt::ui::chat::local_offset();
+
     let _ = tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("warn,mt=info")))
         .try_init();
