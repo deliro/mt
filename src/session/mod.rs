@@ -68,6 +68,14 @@ pub enum Event {
     CannedUpdated(crate::domain::config::CannedMessageSettings),
     RangeTestUpdated(crate::domain::config::RangeTestSettings),
     MqttProxyActivity,
+    /// Raw frame dump, fired for every `FromRadio` the session decodes.
+    /// Fed into the Inspector tab; normal reducers don't need to care.
+    InspectorFrame {
+        at: SystemTime,
+        frame_size: usize,
+        variant: &'static str,
+        debug: String,
+    },
     StatsUpdated(MeshStats),
     TracerouteResult(crate::domain::traceroute::TracerouteResult),
     TracerouteFailed { target: NodeId, reason: String },
@@ -1269,6 +1277,7 @@ async fn handle_incoming(
         Ok(f) => f,
         Err(e) => return LoopStep::Error(e.to_string()),
     };
+    let frame_size = frame.len();
     let msg = match meshtastic::FromRadio::decode(frame.as_slice()) {
         Ok(m) => m,
         Err(e) => {
@@ -1276,6 +1285,8 @@ async fn handle_incoming(
             return LoopStep::Continue;
         }
     };
+    let inspector_event = inspector_frame_event(&msg, frame_size);
+    let _ = tx.send(inspector_event).await;
     for outcome in incoming_outcomes(msg, my_node) {
         match outcome {
             IncomingOutcome::Event(ev) => {
@@ -1399,6 +1410,34 @@ fn spawn_ack_timeout(
 async fn emit_error_and_disconnect(tx: &mpsc::Sender<Event>, msg: &str) {
     let _ = tx.send(Event::Error(msg.into())).await;
     let _ = tx.send(Event::Disconnected).await;
+}
+
+fn inspector_frame_event(msg: &meshtastic::FromRadio, frame_size: usize) -> Event {
+    let variant = match msg.payload_variant.as_ref() {
+        Some(meshtastic::from_radio::PayloadVariant::Packet(_)) => "Packet",
+        Some(meshtastic::from_radio::PayloadVariant::MyInfo(_)) => "MyInfo",
+        Some(meshtastic::from_radio::PayloadVariant::NodeInfo(_)) => "NodeInfo",
+        Some(meshtastic::from_radio::PayloadVariant::Config(_)) => "Config",
+        Some(meshtastic::from_radio::PayloadVariant::LogRecord(_)) => "LogRecord",
+        Some(meshtastic::from_radio::PayloadVariant::ConfigCompleteId(_)) => "ConfigCompleteId",
+        Some(meshtastic::from_radio::PayloadVariant::Rebooted(_)) => "Rebooted",
+        Some(meshtastic::from_radio::PayloadVariant::ModuleConfig(_)) => "ModuleConfig",
+        Some(meshtastic::from_radio::PayloadVariant::Channel(_)) => "Channel",
+        Some(meshtastic::from_radio::PayloadVariant::QueueStatus(_)) => "QueueStatus",
+        Some(meshtastic::from_radio::PayloadVariant::XmodemPacket(_)) => "XmodemPacket",
+        Some(meshtastic::from_radio::PayloadVariant::Metadata(_)) => "Metadata",
+        Some(meshtastic::from_radio::PayloadVariant::MqttClientProxyMessage(_)) => "MqttClientProxyMessage",
+        Some(meshtastic::from_radio::PayloadVariant::FileInfo(_)) => "FileInfo",
+        Some(meshtastic::from_radio::PayloadVariant::ClientNotification(_)) => "ClientNotification",
+        Some(meshtastic::from_radio::PayloadVariant::DeviceuiConfig(_)) => "DeviceuiConfig",
+        None => "Empty",
+    };
+    Event::InspectorFrame {
+        at: SystemTime::now(),
+        frame_size,
+        variant,
+        debug: format!("{msg:#?}"),
+    }
 }
 
 fn incoming_outcomes(msg: meshtastic::FromRadio, my_node: NodeId) -> Vec<IncomingOutcome> {

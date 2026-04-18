@@ -4,6 +4,7 @@ pub mod connect;
 pub mod details;
 pub mod firmware;
 pub mod fonts;
+pub mod inspector;
 pub mod nodes;
 pub mod reconnect;
 pub mod remote_admin;
@@ -51,6 +52,7 @@ pub struct AppState {
     pub nodes_ui: nodes::NodesUi,
     pub settings_ui: settings::SettingsUi,
     pub channels_ui: channels::ChannelsUi,
+    pub inspector_ui: inspector::InspectorUi,
     pub traceroutes: TracerouteUi,
     pub remote_admin: remote_admin::RemoteAdminUi,
     pub probed_nodes: std::collections::HashSet<NodeId>,
@@ -88,6 +90,7 @@ pub enum Tab {
     Nodes,
     Channels,
     Settings,
+    Inspector,
 }
 
 pub struct App {
@@ -188,6 +191,9 @@ impl App {
             Event::CannedUpdated(s) => self.state.snapshot.canned = Some(s),
             Event::RangeTestUpdated(s) => self.state.snapshot.range_test = Some(s),
             Event::MqttProxyActivity => self.state.mqtt_last_proxy = Some(Instant::now()),
+            Event::InspectorFrame { at, frame_size, variant, debug } => {
+                self.state.inspector_ui.push(at, frame_size, variant, debug);
+            }
             Event::StatsUpdated(stats) => self.state.snapshot.stats.merge(&stats),
             Event::TracerouteResult(result) => {
                 let target = result.target;
@@ -249,6 +255,7 @@ impl App {
                 match self.state.active_tab {
                     Tab::Chat => self.state.chat_ui.search.clear(),
                     Tab::Nodes => self.state.nodes_ui.search.clear(),
+                    Tab::Inspector => self.state.inspector_ui.filter.clear(),
                     Tab::Channels | Tab::Settings => {}
                 }
             }
@@ -451,6 +458,7 @@ const fn is_activity(ev: &Event) -> bool {
             | Event::CannedUpdated(_)
             | Event::RangeTestUpdated(_)
             | Event::MqttProxyActivity
+            | Event::InspectorFrame { .. }
             | Event::StatsUpdated(_)
             | Event::TracerouteResult(_)
             | Event::TracerouteFailed { .. }
@@ -562,6 +570,7 @@ impl App {
             ui.selectable_value(&mut self.state.active_tab, Tab::Nodes, "Nodes");
             ui.selectable_value(&mut self.state.active_tab, Tab::Channels, "Channels");
             ui.selectable_value(&mut self.state.active_tab, Tab::Settings, "Settings");
+            ui.selectable_value(&mut self.state.active_tab, Tab::Inspector, "Inspector");
         });
     }
 
@@ -605,6 +614,11 @@ impl App {
                 if let Some(kind) = self.state.settings_ui.pending_clear.take() {
                     self.handle_clear(kind);
                 }
+            }
+            Tab::Inspector => {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    inspector::render(ui, &mut self.state.inspector_ui);
+                });
             }
         }
     }
