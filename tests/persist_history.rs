@@ -2,9 +2,10 @@
 
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use mt::domain::ids::{ChannelIndex, NodeId, PacketId};
+use mt::domain::ids::{BleAddress, ChannelIndex, NodeId, PacketId};
 use mt::domain::message::{DeliveryState, Direction, Recipient, TextMessage};
 use mt::domain::node::{Node, NodeRole, Position};
+use mt::domain::profile::ConnectionProfile;
 use mt::persist::history::HistoryStore;
 
 fn sample_msg(id: u32, text: &str, state: DeliveryState) -> TextMessage {
@@ -131,6 +132,31 @@ fn clear_scopes_to_my_node() {
     assert_eq!(store.load_nodes(a).unwrap().len(), 0);
     assert_eq!(store.load_messages(b).unwrap().len(), 1);
     assert_eq!(store.load_nodes(b).unwrap().len(), 1);
+}
+
+#[test]
+fn profiles_and_last_active_survive_reopen() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("history.db");
+
+    let profiles = vec![
+        ConnectionProfile::Ble { name: "pack".into(), address: BleAddress::new("AA:BB:CC:DD:EE:FF") },
+        ConnectionProfile::Tcp { name: "bridge".into(), host: "10.0.0.5".into(), port: 4403 },
+    ];
+
+    {
+        let store = HistoryStore::open(&path).unwrap();
+        store.save_profiles(&profiles).unwrap();
+        store.save_last_active(Some("ble:AA:BB:CC:DD:EE:FF")).unwrap();
+    }
+
+    let reopened = HistoryStore::open(&path).unwrap();
+    let loaded = reopened.load_profiles().unwrap();
+    assert_eq!(loaded.len(), 2);
+    assert_eq!(reopened.load_last_active().unwrap().as_deref(), Some("ble:AA:BB:CC:DD:EE:FF"));
+
+    reopened.save_last_active(None).unwrap();
+    assert!(reopened.load_last_active().unwrap().is_none());
 }
 
 #[test]

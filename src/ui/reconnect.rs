@@ -114,8 +114,11 @@ pub fn render_banner(
     if !disconnected && !connecting {
         return;
     }
-    if state.attempt == 0 && !connecting {
-        // First automatic attempt after startup — no need for a banner yet.
+    // Banner is for *retries*. A fresh user-initiated Connect (attempt == 0)
+    // is represented by the regular "Connecting…" status; confusing the
+    // user with "Reconnecting attempt 1" on their very first click would
+    // be a lie.
+    if state.attempt == 0 {
         return;
     }
     egui::TopBottomPanel::top("reconnect_banner").show(ctx, |ui| {
@@ -159,5 +162,10 @@ pub fn tick(
         return;
     }
     let Some(profile) = state.pop_due(now) else { return };
+    tracing::info!(
+        name = profile.name(),
+        attempt = state.attempt,
+        "auto-reconnect dispatching Connect"
+    );
     let _ = cmd.send(Command::Connect(profile));
 }

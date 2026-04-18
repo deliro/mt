@@ -108,6 +108,20 @@ impl App {
         let pre_armed = last_active_key.as_ref().and_then(|key| {
             profiles.iter().find(|p| &p.key() == key).cloned()
         });
+        match (last_active_key.as_deref(), pre_armed.as_ref()) {
+            (Some(key), Some(profile)) => {
+                tracing::info!(%key, name = profile.name(), "auto-reconnect armed from last_active");
+            }
+            (Some(key), None) => {
+                tracing::warn!(
+                    %key,
+                    "last_active profile key present but not found in profiles list — auto-reconnect disabled"
+                );
+            }
+            (None, _) => {
+                tracing::info!("no last_active profile on startup — user must connect manually");
+            }
+        }
         let mut reconnect = reconnect::ReconnectUi {
             last_persisted_key: last_active_key,
             ..reconnect::ReconnectUi::default()
@@ -193,6 +207,15 @@ impl App {
         snapshot.messages.sort_by_key(|m| m.received_at);
         self.state.snapshot = snapshot;
         self.state.reconnect.on_connected();
+        tracing::info!(
+            profile = self
+                .state
+                .reconnect
+                .profile
+                .as_ref()
+                .map_or("<none>", crate::domain::profile::ConnectionProfile::name),
+            "session connected"
+        );
         self.persist_last_active();
     }
 
@@ -227,12 +250,21 @@ impl App {
         if key == self.state.reconnect.last_persisted_key {
             return;
         }
-        if let Some(store) = self.store.as_ref()
-            && let Err(e) = store.save_last_active(key.as_deref())
-        {
+        let Some(store) = self.store.as_ref() else {
+            tracing::warn!(
+                "no history store open — last_active will not survive restart"
+            );
+            self.state.reconnect.last_persisted_key = key;
+            return;
+        };
+        if let Err(e) = store.save_last_active(key.as_deref()) {
             warn!(%e, "persist last-active profile failed");
             return;
         }
+        tracing::info!(
+            key = key.as_deref().unwrap_or("<none>"),
+            "persisted last_active profile"
+        );
         self.state.reconnect.last_persisted_key = key;
     }
 
