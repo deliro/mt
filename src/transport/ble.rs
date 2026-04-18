@@ -6,11 +6,11 @@ use std::time::Duration;
 use btleplug::api::{
     Central, CharPropFlags, Characteristic, Manager as _, Peripheral as _, ScanFilter, WriteType,
 };
-use btleplug::platform::{Manager, Peripheral as PlatformPeripheral};
+use btleplug::platform::{Adapter, Manager, Peripheral as PlatformPeripheral};
 use futures::{Sink, Stream, StreamExt};
 use tokio::sync::mpsc;
 use tokio::time::sleep;
-use tracing::warn;
+use tracing::{debug, info, warn};
 use uuid::Uuid;
 
 use crate::domain::ids::BleAddress;
@@ -22,7 +22,7 @@ pub const TORADIO_UUID: Uuid = Uuid::from_u128(0xf75c_76d2_129e_4dad_a1dd_7866_1
 pub const FROMRADIO_UUID: Uuid = Uuid::from_u128(0x2c55_e69e_4993_11ed_b878_0242_ac12_0002);
 pub const FROMNUM_UUID: Uuid = Uuid::from_u128(0xed9d_a18c_a800_4f66_a670_aa75_47e3_4453);
 
-const SCAN_DURATION: Duration = Duration::from_secs(3);
+const CONNECT_SCAN_DURATION: Duration = Duration::from_secs(2);
 
 pub struct Discovered {
     pub name: String,
@@ -39,6 +39,7 @@ pub async fn scan(duration: Duration) -> Result<Vec<Discovered>, ConnectError> {
         .await
         .map_err(|e| ConnectError::BleGatt(e.to_string()))?;
     sleep(duration).await;
+    let _ = adapter.stop_scan().await;
 
     let peripherals =
         adapter.peripherals().await.map_err(|e| ConnectError::BleGatt(e.to_string()))?;
@@ -46,40 +47,33 @@ pub async fn scan(duration: Duration) -> Result<Vec<Discovered>, ConnectError> {
     for p in peripherals {
         let Ok(Some(props)) = p.properties().await else { continue };
         let is_paired = p.is_connected().await.unwrap_or(false);
-        out.push(Discovered {
-            name: props.local_name.unwrap_or_else(|| "Meshtastic".into()),
-            address: BleAddress::new(p.address().to_string()),
-            rssi_dbm: props.rssi,
-            is_paired,
-        });
+        let addr = BleAddress::new(p.address().to_string());
+        let name = props.local_name.clone().unwrap_or_else(|| "Meshtastic".into());
+        debug!(%name, addr = %addr.as_str(), connected = is_paired, "ble scan row");
+        out.push(Discovered { name, address: addr, rssi_dbm: props.rssi, is_paired });
     }
-    let _ = adapter.stop_scan().await;
+    info!(count = out.len(), "ble scan finished");
     Ok(out)
 }
 
 pub async fn connect(address: &BleAddress) -> Result<BoxedTransport, ConnectError> {
+    info!(addr = %address.as_str(), "ble connect: start");
     let manager = Manager::new().await.map_err(|e| ConnectError::BleGatt(e.to_string()))?;
     let adapter = first_adapter(&manager).await?;
-    adapter
-        .start_scan(ScanFilter { services: vec![SERVICE_UUID] })
-        .await
-        .map_err(|e| ConnectError::BleGatt(e.to_string()))?;
-    sleep(SCAN_DURATION).await;
 
-    let peripherals =
-        adapter.peripherals().await.map_err(|e| ConnectError::BleGatt(e.to_string()))?;
-    let _ = adapter.stop_scan().await;
+    let peripheral = locate_peripheral(&adapter, address).await?;
+    info!(addr = %address.as_str(), "ble connect: peripheral located, opening gatt");
 
-    let peripheral = peripherals
-        .into_iter()
-        .find(|p| p.address().to_string().eq_ignore_ascii_case(address.as_str()))
-        .ok_or_else(|| ConnectError::BleDeviceNotFound(address.as_str().into()))?;
+    if !peripheral.is_connected().await.unwrap_or(false) {
+        peripheral.connect().await.map_err(|e| map_connect_error(&e.to_string()))?;
+    }
+    info!("ble connect: gatt connected");
 
-    peripheral.connect().await.map_err(|e| map_connect_error(&e.to_string()))?;
     peripheral
         .discover_services()
         .await
         .map_err(|e| ConnectError::BleGatt(e.to_string()))?;
+    info!("ble connect: services discovered");
 
     let chars = peripheral.characteristics();
     let to_radio = find_char(&chars, TORADIO_UUID)?;
@@ -90,12 +84,46 @@ pub async fn connect(address: &BleAddress) -> Result<BoxedTransport, ConnectErro
         return Err(ConnectError::BleGatt("fromNum has no NOTIFY property".into()));
     }
     peripheral.subscribe(&from_num).await.map_err(|e| ConnectError::BleGatt(e.to_string()))?;
+    info!("ble connect: subscribed to fromNum");
 
     let transport = BleTransport::spawn(peripheral, to_radio, from_radio).await?;
     Ok(Box::pin(transport))
 }
 
-async fn first_adapter(manager: &Manager) -> Result<btleplug::platform::Adapter, ConnectError> {
+async fn locate_peripheral(
+    adapter: &Adapter,
+    address: &BleAddress,
+) -> Result<PlatformPeripheral, ConnectError> {
+    if let Some(p) = find_in_adapter(adapter, address).await? {
+        info!(addr = %address.as_str(), "ble connect: peripheral found in cache");
+        return Ok(p);
+    }
+
+    debug!(addr = %address.as_str(), "ble connect: peripheral not cached, scanning");
+    adapter
+        .start_scan(ScanFilter { services: vec![SERVICE_UUID] })
+        .await
+        .map_err(|e| ConnectError::BleGatt(e.to_string()))?;
+    sleep(CONNECT_SCAN_DURATION).await;
+    let _ = adapter.stop_scan().await;
+
+    find_in_adapter(adapter, address)
+        .await?
+        .ok_or_else(|| ConnectError::BleDeviceNotFound(address.as_str().into()))
+}
+
+async fn find_in_adapter(
+    adapter: &Adapter,
+    address: &BleAddress,
+) -> Result<Option<PlatformPeripheral>, ConnectError> {
+    let peripherals =
+        adapter.peripherals().await.map_err(|e| ConnectError::BleGatt(e.to_string()))?;
+    Ok(peripherals
+        .into_iter()
+        .find(|p| p.address().to_string().eq_ignore_ascii_case(address.as_str())))
+}
+
+async fn first_adapter(manager: &Manager) -> Result<Adapter, ConnectError> {
     let adapters = manager.adapters().await.map_err(|_| ConnectError::BleAdapterUnavailable)?;
     adapters.into_iter().next().ok_or(ConnectError::BleAdapterUnavailable)
 }

@@ -15,7 +15,6 @@ pub struct ScanUi {
     pub open: bool,
     pub results: Arc<Mutex<Vec<DiscoveredRow>>>,
     pub scanning: Arc<Mutex<bool>>,
-    pub pending_pairing: Option<BleAddress>,
 }
 
 #[derive(Clone)]
@@ -23,12 +22,17 @@ pub struct DiscoveredRow {
     pub name: String,
     pub address: BleAddress,
     pub rssi_dbm: Option<i16>,
-    pub is_paired: bool,
+    pub is_connected: bool,
 }
 
 impl From<Discovered> for DiscoveredRow {
     fn from(d: Discovered) -> Self {
-        Self { name: d.name, address: d.address, rssi_dbm: d.rssi_dbm, is_paired: d.is_paired }
+        Self {
+            name: d.name,
+            address: d.address,
+            rssi_dbm: d.rssi_dbm,
+            is_connected: d.is_paired,
+        }
     }
 }
 
@@ -56,81 +60,60 @@ pub fn render(
         return;
     }
     let mut close = false;
-    let mut start_pairing: Option<(String, BleAddress)> = None;
+    let mut rescan = false;
     let mut start_connect: Option<(String, BleAddress)> = None;
     let mut save_profile: Option<(String, BleAddress)> = None;
 
     egui::Window::new("BLE Scan").collapsible(false).show(ctx, |ui| {
         let scanning = *ui_state.scanning.lock();
-        if scanning {
-            ui.label("Scanning…");
-        }
+        ui.horizontal(|ui| {
+            if scanning {
+                ui.spinner();
+                ui.label("Scanning…");
+            } else if ui.button("Rescan").clicked() {
+                rescan = true;
+            }
+        });
+        ui.separator();
+
         let rows = ui_state.results.lock().clone();
+        if rows.is_empty() && !scanning {
+            ui.weak("No Meshtastic devices found yet.");
+        }
         for row in rows {
             ui.horizontal(|ui| {
                 ui.label(&row.name);
-                ui.label(row.address.as_str());
+                ui.monospace(row.address.as_str());
                 if let Some(r) = row.rssi_dbm {
                     ui.label(format!("{r} dBm"));
                 }
-                if row.is_paired {
-                    ui.colored_label(egui::Color32::LIGHT_GREEN, "paired");
-                } else {
-                    ui.colored_label(egui::Color32::YELLOW, "new");
+                if row.is_connected {
+                    ui.colored_label(egui::Color32::LIGHT_GREEN, "connected");
                 }
                 if ui.button("Connect").clicked() {
-                    if row.is_paired {
-                        start_connect = Some((row.name.clone(), row.address.clone()));
-                    } else {
-                        start_pairing = Some((row.name.clone(), row.address.clone()));
-                    }
+                    start_connect = Some((row.name.clone(), row.address.clone()));
                 }
                 if ui.button("Save").clicked() {
                     save_profile = Some((row.name.clone(), row.address.clone()));
                 }
             });
         }
+        ui.separator();
         if ui.button("Close").clicked() {
             close = true;
         }
     });
 
+    if rescan {
+        open(ui_state);
+    }
     if let Some((name, addr)) = start_connect {
         let _ = cmd.send(Command::Connect(ConnectionProfile::Ble { name, address: addr }));
-    }
-    if let Some((_, addr)) = start_pairing {
-        ui_state.pending_pairing = Some(addr);
+        close = true;
     }
     if let Some((name, addr)) = save_profile {
         profiles.push(ConnectionProfile::Ble { name, address: addr });
     }
-    if let Some(addr) = ui_state.pending_pairing.clone() {
-        let mut continue_connect = false;
-        let mut cancel = false;
-        egui::Window::new("First-time pairing").collapsible(false).show(ctx, |ui| {
-            ui.label("Meshtastic will display a 6-digit PIN on the device screen.");
-            ui.label("Your OS will open a system dialog asking for it — type it there.");
-            ui.label("This is only needed the first time you pair.");
-            ui.horizontal(|ui| {
-                if ui.button("Continue").clicked() {
-                    continue_connect = true;
-                }
-                if ui.button("Cancel").clicked() {
-                    cancel = true;
-                }
-            });
-        });
-        if continue_connect {
-            let _ = cmd.send(Command::Connect(ConnectionProfile::Ble {
-                name: "New device".into(),
-                address: addr,
-            }));
-            ui_state.pending_pairing = None;
-        } else if cancel {
-            ui_state.pending_pairing = None;
-        }
-    }
-
     if close {
         ui_state.open = false;
     }

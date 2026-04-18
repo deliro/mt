@@ -32,16 +32,27 @@ pub fn render(
     profiles_path: &Path,
 ) {
     ui.heading("Meshtastic");
+    let busy = matches!(state.status, crate::ui::SessionStatus::Connecting);
+    if busy {
+        ui.horizontal(|ui| {
+            ui.spinner();
+            ui.label("Connecting…");
+            if ui.button("Cancel").clicked() {
+                let _ = cmd.send(Command::Disconnect);
+            }
+        });
+        ui.separator();
+    }
     ui.horizontal(|ui| {
-        if ui.button("Add profile").clicked() {
+        if ui.add_enabled(!busy, egui::Button::new("Add profile")).clicked() {
             state.connect_ui.add = AddForm { open: true, ..AddForm::default() };
         }
-        if ui.button("Scan BLE").clicked() {
+        if ui.add_enabled(!busy, egui::Button::new("Scan BLE")).clicked() {
             crate::ui::scan::open(&mut state.scan_ui);
         }
     });
     ui.separator();
-    list_profiles(ui, state, cmd, profiles_path);
+    list_profiles(ui, state, cmd, profiles_path, busy);
     if state.connect_ui.add.open {
         add_dialog(ui.ctx(), state, profiles_path);
     }
@@ -52,16 +63,17 @@ fn list_profiles(
     state: &mut AppState,
     cmd: &mpsc::UnboundedSender<Command>,
     profiles_path: &Path,
+    busy: bool,
 ) {
     let mut delete_idx: Option<usize> = None;
     let profiles = state.profiles.clone();
     for (idx, profile) in profiles.iter().enumerate() {
         ui.horizontal(|ui| {
             ui.label(format!("[{:?}] {}", profile.kind(), profile.name()));
-            if ui.button("Connect").clicked() {
+            if ui.add_enabled(!busy, egui::Button::new("Connect")).clicked() {
                 let _ = cmd.send(Command::Connect(profile.clone()));
             }
-            if ui.button("Delete").clicked() {
+            if ui.add_enabled(!busy, egui::Button::new("Delete")).clicked() {
                 delete_idx = Some(idx);
             }
         });

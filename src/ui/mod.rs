@@ -14,9 +14,17 @@ use crate::domain::snapshot::DeviceSnapshot;
 use crate::session::Event;
 use crate::session::commands::Command;
 
+#[derive(Default, Clone, Debug)]
+pub enum SessionStatus {
+    #[default]
+    Disconnected,
+    Connecting,
+    Connected,
+}
+
 #[derive(Default)]
 pub struct AppState {
-    pub connected: bool,
+    pub status: SessionStatus,
     pub snapshot: DeviceSnapshot,
     pub profiles: Vec<ConnectionProfile>,
     pub last_error: Option<String>,
@@ -24,6 +32,12 @@ pub struct AppState {
     pub connect_ui: connect::ConnectUi,
     pub scan_ui: scan::ScanUi,
     pub chat_ui: chat::ChatUi,
+}
+
+impl AppState {
+    pub fn connected(&self) -> bool {
+        matches!(self.status, SessionStatus::Connected)
+    }
 }
 
 #[derive(Default, Copy, Clone, Eq, PartialEq)]
@@ -64,11 +78,11 @@ impl App {
     fn reduce(&mut self, ev: Event) {
         match ev {
             Event::Connecting => {
-                self.state.connected = false;
+                self.state.status = SessionStatus::Connecting;
                 self.state.last_error = None;
             }
             Event::Connected(snap) => {
-                self.state.connected = true;
+                self.state.status = SessionStatus::Connected;
                 self.state.snapshot = *snap;
             }
             Event::NodeUpdated(node) => {
@@ -86,7 +100,7 @@ impl App {
                 }
             }
             Event::Disconnected => {
-                self.state.connected = false;
+                self.state.status = SessionStatus::Disconnected;
             }
             Event::Error(msg) => {
                 self.state.last_error = Some(msg);
@@ -102,7 +116,7 @@ impl eframe::App for App {
         egui::TopBottomPanel::top("status").show(ctx, |ui| status::render(ui, &self.state));
         scan::render(ctx, &mut self.state.scan_ui, &self.cmd_tx, &mut self.state.profiles);
 
-        if !self.state.connected {
+        if !self.state.connected() {
             egui::CentralPanel::default().show(ctx, |ui| {
                 connect::render(ui, &mut self.state, &self.cmd_tx, &self.profiles_path);
             });

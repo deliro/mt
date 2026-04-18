@@ -9,7 +9,7 @@ use futures::{SinkExt, StreamExt};
 use prost::Message;
 use tokio::sync::mpsc;
 use tokio::time::{MissedTickBehavior, interval, sleep};
-use tracing::warn;
+use tracing::{debug, warn};
 
 use crate::codec::frame::encode as encode_frame;
 use crate::domain::channel::{Channel, ChannelRole};
@@ -84,41 +84,55 @@ async fn run_connection(
     rx: &mut mpsc::UnboundedReceiver<Command>,
     tx: &mpsc::Sender<Event>,
 ) {
-    let Some((transport, kind)) = open_transport(connect, profile, tx).await else { return };
-    let Some((snapshot, transport)) = handshake_or_fail(transport, kind, tx).await else { return };
-    let my_node = snapshot.my_node;
-    let _ = tx.send(Event::Connected(Box::new(snapshot))).await;
-    run_ready_loop(transport, my_node, rx, tx).await;
-}
-
-async fn open_transport(
-    connect: &Connector,
-    profile: ConnectionProfile,
-    tx: &mpsc::Sender<Event>,
-) -> Option<(BoxedTransport, TransportKind)> {
     let _ = tx.send(Event::Connecting).await;
-    match (connect)(profile).await {
-        Ok(pair) => Some(pair),
-        Err(e) => {
-            let _ = tx.send(Event::Error(e.to_string())).await;
+    let outcome = connect_with_cancel(connect, profile, rx).await;
+    match outcome {
+        ConnectOutcome::Ready(snap, transport) => {
+            let my_node = snap.my_node;
+            let _ = tx.send(Event::Connected(Box::new(snap))).await;
+            run_ready_loop(transport, my_node, rx, tx).await;
+        }
+        ConnectOutcome::Failed(msg) => {
+            let _ = tx.send(Event::Error(msg)).await;
             let _ = tx.send(Event::Disconnected).await;
-            None
+        }
+        ConnectOutcome::Cancelled => {
+            let _ = tx.send(Event::Disconnected).await;
         }
     }
 }
 
-async fn handshake_or_fail(
-    transport: BoxedTransport,
-    kind: TransportKind,
-    tx: &mpsc::Sender<Event>,
-) -> Option<(DeviceSnapshot, BoxedTransport)> {
-    let config_id = ConfigId::random();
-    match run_handshake(transport, kind, config_id).await {
-        Ok(pair) => Some(pair),
-        Err(e) => {
-            let _ = tx.send(Event::Error(e.to_string())).await;
-            let _ = tx.send(Event::Disconnected).await;
-            None
+enum ConnectOutcome {
+    Ready(DeviceSnapshot, BoxedTransport),
+    Failed(String),
+    Cancelled,
+}
+
+async fn connect_with_cancel(
+    connect: &Connector,
+    profile: ConnectionProfile,
+    rx: &mut mpsc::UnboundedReceiver<Command>,
+) -> ConnectOutcome {
+    let work = async {
+        let (transport, kind) = (connect)(profile).await?;
+        let (snapshot, transport) = run_handshake(transport, kind, ConfigId::random()).await?;
+        Ok::<(DeviceSnapshot, BoxedTransport), ConnectError>((snapshot, transport))
+    };
+    let mut work = Box::pin(work);
+    loop {
+        tokio::select! {
+            biased;
+            cmd = rx.recv() => match cmd {
+                Some(Command::Disconnect) | None => return ConnectOutcome::Cancelled,
+                Some(Command::Connect(_)) => warn!("ignoring Connect while already connecting"),
+                Some(Command::SendText { .. } | Command::AckTimeout(_)) => {
+                    debug!("ignoring command while connecting");
+                }
+            },
+            result = &mut work => return match result {
+                Ok((snap, transport)) => ConnectOutcome::Ready(snap, transport),
+                Err(e) => ConnectOutcome::Failed(e.to_string()),
+            },
         }
     }
 }
