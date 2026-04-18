@@ -2,9 +2,9 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::domain::channel::{Channel, ChannelRole};
 use crate::domain::config::{
-    BluetoothSettings, DeviceSettings, DisplaySettings, LoraSettings, MqttSettings,
-    NeighborInfoSettings, NetworkSettings, PositionSettings, PowerSettings, StoreForwardSettings,
-    TelemetrySettings,
+    BluetoothSettings, ConsoleAccess, DeviceSettings, DisplaySettings, LoraSettings, MqttSettings,
+    NeighborInfoSettings, NetworkSettings, PositionSettings, PowerSettings, SecuritySettings,
+    StoreForwardSettings, TelemetrySettings,
 };
 use crate::domain::ids::{BROADCAST_NODE, ChannelIndex, ConfigId, NodeId, PacketId};
 use crate::domain::message::{DeliveryState, Direction, Recipient, TextMessage};
@@ -104,6 +104,7 @@ pub fn node_from_proto(ni: &meshtastic::NodeInfo) -> Node {
         }),
         is_favorite: ni.is_favorite,
         is_ignored: ni.is_ignored,
+        public_key: ni.user.as_ref().map(|u| u.public_key.clone()).unwrap_or_default(),
     }
 }
 
@@ -291,9 +292,24 @@ fn config_fragments(cfg: meshtastic::Config) -> Vec<HandshakeFragment> {
         PayloadVariant::Bluetooth(b) => {
             vec![HandshakeFragment::Bluetooth(bluetooth_from_proto(&b))]
         }
-        PayloadVariant::Security(_) | PayloadVariant::Sessionkey(_) | PayloadVariant::DeviceUi(_) => {
-            Vec::new()
+        PayloadVariant::Security(s) => {
+            vec![HandshakeFragment::Security(security_from_proto(&s))]
         }
+        PayloadVariant::Sessionkey(_) | PayloadVariant::DeviceUi(_) => Vec::new(),
+    }
+}
+
+pub fn security_from_proto(s: &meshtastic::config::SecurityConfig) -> SecuritySettings {
+    SecuritySettings {
+        public_key: s.public_key.clone(),
+        private_key: s.private_key.clone(),
+        admin_keys: s.admin_key.clone(),
+        is_managed: s.is_managed,
+        admin_channel_enabled: s.admin_channel_enabled,
+        console: ConsoleAccess {
+            serial_enabled: s.serial_enabled,
+            debug_log_api_enabled: s.debug_log_api_enabled,
+        },
     }
 }
 

@@ -42,4 +42,5 @@ pub struct Node {
     pub position: Option<Position>,
     pub is_favorite: bool,
     pub is_ignored: bool,
+    pub public_key: Vec<u8>,
 }

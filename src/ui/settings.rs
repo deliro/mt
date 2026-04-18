@@ -1,5 +1,7 @@
 use std::collections::HashSet;
 
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD;
 use eframe::egui;
 use tokio::sync::mpsc;
 
@@ -7,9 +9,10 @@ use crate::domain::config::{
     BluetoothSettings, CLOCK_CHOICES, DEVICE_ROLE_CHOICES, DISPLAY_UNITS_CHOICES, DeviceSettings,
     DisplaySettings, GPS_MODE_CHOICES, LoraSettings, MODEM_PRESET_CHOICES, MqttSettings,
     NeighborInfoSettings, NetworkSettings, ORIENTATION_CHOICES, PAIRING_MODE_CHOICES,
-    PositionSettings, PowerSettings, REBROADCAST_CHOICES, REGION_CHOICES, StoreForwardSettings,
-    TelemetrySettings, clock_label, device_role_label, display_units_label, gps_mode_label,
-    modem_preset_label, orientation_label, pairing_mode_label, rebroadcast_label, region_label,
+    PositionSettings, PowerSettings, REBROADCAST_CHOICES, REGION_CHOICES, SecuritySettings,
+    StoreForwardSettings, TelemetrySettings, clock_label, device_role_label, display_units_label,
+    gps_mode_label, modem_preset_label, orientation_label, pairing_mode_label, rebroadcast_label,
+    region_label,
 };
 use crate::domain::snapshot::DeviceSnapshot;
 use crate::session::commands::{AdminAction, Command};
@@ -28,6 +31,7 @@ pub enum Section {
     Telemetry,
     NeighborInfo,
     StoreForward,
+    Security,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -47,6 +51,7 @@ pub struct SettingsUi {
     pub stored_nodes: Option<i64>,
     pub previous_fixed_enabled: bool,
     pub pending_admin: Option<AdminAction>,
+    pub security_new_admin_key: String,
 }
 
 #[derive(Default, Clone)]
@@ -67,6 +72,7 @@ pub struct Draft {
     pub telemetry: TelemetrySettings,
     pub neighbor_info: NeighborInfoSettings,
     pub store_forward: StoreForwardSettings,
+    pub security: SecuritySettings,
 }
 
 #[derive(Default, Clone)]
@@ -111,6 +117,7 @@ fn sections(ui: &mut egui::Ui, s: &mut SettingsUi, cmd: &mpsc::UnboundedSender<C
     collapsible(ui, "Telemetry module", |ui| telemetry_section(ui, s, cmd));
     collapsible(ui, "Neighbor Info", |ui| neighbor_info_section(ui, s, cmd));
     collapsible(ui, "Store & Forward", |ui| store_forward_section(ui, s, cmd));
+    collapsible(ui, "Security", |ui| security_section(ui, s, cmd));
     collapsible(ui, "Admin", |ui| admin_section(ui, s));
     collapsible(ui, "Storage", |ui| storage_section(ui, s));
     admin_confirm_modal(ui.ctx(), s, cmd);
@@ -1123,6 +1130,157 @@ fn store_forward_section(
     );
 }
 
+// ---- Security ----
+
+fn security_section(
+    ui: &mut egui::Ui,
+    s: &mut SettingsUi,
+    cmd: &mpsc::UnboundedSender<Command>,
+) {
+    let mut dirty = s.dirty.is(Section::Security);
+    security_identity(ui, &s.draft.security);
+    ui.separator();
+    security_admin_keys(ui, s, &mut dirty);
+    ui.separator();
+    security_flags(ui, s, &mut dirty);
+    commit(
+        s,
+        Section::Security,
+        dirty,
+        ui,
+        "Save Security",
+        cmd,
+        |d| Command::SetSecurity(d.security.clone()),
+    );
+}
+
+fn security_identity(ui: &mut egui::Ui, sec: &SecuritySettings) {
+    ui.label(egui::RichText::new("This node's identity").strong());
+    ui.horizontal(|ui| {
+        ui.label("Public key:");
+        if sec.public_key.is_empty() {
+            ui.colored_label(egui::Color32::YELLOW, "<firmware hasn't generated one yet>")
+                .on_hover_text(
+                    "Firmware ≥ 2.5 generates a Curve25519 keypair on first boot. If empty, \
+                     the device may be older or hasn't finished its first boot.",
+                );
+        } else {
+            let b64 = STANDARD.encode(&sec.public_key);
+            ui.monospace(shorten(&b64, 24))
+                .on_hover_text(b64.as_str());
+            if ui.small_button("Copy").clicked() {
+                ui.ctx().copy_text(b64);
+            }
+        }
+    });
+    ui.label(egui::RichText::new(
+        "Your public key identifies this node. Share it with anyone who should be able to \
+         remote-admin this node (they paste it into their Admin keys list) or send you \
+         direct messages on firmware ≥ 2.5.",
+    ).weak());
+}
+
+fn security_admin_keys(ui: &mut egui::Ui, s: &mut SettingsUi, dirty: &mut bool) {
+    ui.label(egui::RichText::new("Admin keys (remote admin allowlist)").strong());
+    ui.label(egui::RichText::new(
+        "Up to 3 public keys that may administer this node over the mesh. If empty, the \
+         only way to admin this node is a direct physical connection (BLE / serial / TCP).",
+    ).weak());
+    let mut remove: Option<usize> = None;
+    for (idx, key) in s.draft.security.admin_keys.iter().enumerate() {
+        ui.horizontal(|ui| {
+            let b64 = STANDARD.encode(key);
+            ui.monospace(format!("{}. {}", idx.saturating_add(1), shorten(&b64, 24)))
+                .on_hover_text(b64);
+            if ui.small_button("Remove").clicked() {
+                remove = Some(idx);
+            }
+        });
+    }
+    if let Some(i) = remove
+        && i < s.draft.security.admin_keys.len()
+    {
+        let _ = s.draft.security.admin_keys.remove(i);
+        *dirty = true;
+    }
+    if s.draft.security.admin_keys.len() < 3 {
+        ui.horizontal(|ui| {
+            ui.label("Add:");
+            ui.add(
+                egui::TextEdit::singleline(&mut s.security_new_admin_key)
+                    .hint_text("paste base64 public key")
+                    .desired_width(280.0),
+            );
+            let parsed: Option<Vec<u8>> = if s.security_new_admin_key.trim().is_empty() {
+                None
+            } else {
+                STANDARD.decode(s.security_new_admin_key.trim().as_bytes()).ok()
+            };
+            let valid = parsed.as_ref().is_some_and(|b| b.len() == 32);
+            if ui.add_enabled(valid, egui::Button::new("Add")).clicked()
+                && let Some(bytes) = parsed
+            {
+                s.draft.security.admin_keys.push(bytes);
+                s.security_new_admin_key.clear();
+                *dirty = true;
+            }
+            if !s.security_new_admin_key.trim().is_empty() && !valid {
+                ui.colored_label(
+                    egui::Color32::LIGHT_RED,
+                    "expected 32-byte base64 key",
+                );
+            }
+        });
+    } else {
+        ui.label(egui::RichText::new("Maximum of 3 admin keys reached.").weak());
+    }
+}
+
+fn security_flags(ui: &mut egui::Ui, s: &mut SettingsUi, dirty: &mut bool) {
+    checkbox(
+        ui,
+        "Managed device",
+        &mut s.draft.security.is_managed,
+        dirty,
+        "When on, the device refuses local configuration changes (over BLE / serial / TCP). \
+         Only remote-admin via a key in the list above can change settings. Turn this on \
+         only for deployments where you're sure remote admin still works.",
+    );
+    checkbox(
+        ui,
+        "Admin channel (legacy)",
+        &mut s.draft.security.admin_channel_enabled,
+        dirty,
+        "Old PSK-based admin mechanism. Anyone on a channel named 'admin' can administer \
+         this node. Off is strongly recommended on firmware ≥ 2.5 — use admin_key instead.",
+    );
+    checkbox(
+        ui,
+        "Serial console",
+        &mut s.draft.security.console.serial_enabled,
+        dirty,
+        "Exposes a serial console on the USB port. Independent from the Meshtastic phone \
+         API; meant for firmware-level debugging.",
+    );
+    checkbox(
+        ui,
+        "Debug log over API",
+        &mut s.draft.security.console.debug_log_api_enabled,
+        dirty,
+        "Stream verbose firmware logs back to the phone / client. Normally suppressed as \
+         soon as a client connects to keep the LoRa link quiet.",
+    );
+}
+
+fn shorten(s: &str, take: usize) -> String {
+    if s.chars().count() <= take {
+        return s.to_owned();
+    }
+    let mut out: String = s.chars().take(take).collect();
+    out.push('…');
+    out
+}
+
 // ---- Commit helper ----
 
 fn commit(
@@ -1159,6 +1317,7 @@ const fn section_label(section: Section) -> &'static str {
         Section::Telemetry => "Telemetry module",
         Section::NeighborInfo => "Neighbor Info",
         Section::StoreForward => "Store & Forward",
+        Section::Security => "Security",
     }
 }
 
@@ -1340,6 +1499,11 @@ fn sync_from_snapshot(snapshot: &DeviceSnapshot, s: &mut SettingsUi) {
         snapshot.store_forward.as_ref(),
         &mut s.draft.store_forward,
         s.dirty.is(Section::StoreForward),
+    );
+    sync_section(
+        snapshot.security.as_ref(),
+        &mut s.draft.security,
+        s.dirty.is(Section::Security),
     );
     if !s.dirty.is(Section::Position) {
         if let Some(pos) = snapshot.nodes.get(&snapshot.my_node).and_then(|n| n.position.as_ref()) {

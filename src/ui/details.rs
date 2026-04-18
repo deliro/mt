@@ -53,6 +53,7 @@ enum Action {
     ToggleIgnored,
     SendMessage,
     Traceroute,
+    RemoteAdmin,
 }
 
 fn render_actions(
@@ -112,6 +113,17 @@ fn render_actions(
         {
             action = Some(Action::Traceroute);
         }
+        if ui
+            .button("Remote admin…")
+            .on_hover_text(
+                "Send admin commands (reboot / shutdown / factory reset / …) to this node over \
+                 the mesh. The target accepts them only if YOUR public key is in its \
+                 Admin keys list (Settings → Security on the target node).",
+            )
+            .clicked()
+        {
+            action = Some(Action::RemoteAdmin);
+        }
     });
     action
 }
@@ -146,6 +158,12 @@ fn apply_action(
             let _ = state.traceroutes.pending.insert(id);
             let _ = state.traceroutes.outcomes.remove(&id);
             let _ = cmd.send(Command::Traceroute { node: id });
+        }
+        Action::RemoteAdmin => {
+            state.remote_admin.target = Some(id);
+            state.remote_admin.pending = None;
+            state.remote_admin.last_dispatched = None;
+            state.detail_node = None;
         }
     }
 }

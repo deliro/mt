@@ -22,6 +22,7 @@ fn node(id: u32, name: &str) -> Node {
         position: None,
         is_favorite: false,
         is_ignored: false,
+        public_key: Vec::new(),
     }
 }
 

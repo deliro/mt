@@ -80,6 +80,7 @@ fn node_and_profile_compose_without_leaking_proto() {
         position: None,
         is_favorite: false,
         is_ignored: false,
+        public_key: Vec::new(),
     };
     let _ = ConnectionProfile::Ble { name: "r".into(), address: BleAddress::new("AA:BB") };
     let _ = ConnectionProfile::Serial { name: "s".into(), path: PathBuf::from("/dev/ttyUSB0") };

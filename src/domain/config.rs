@@ -181,6 +181,41 @@ pub struct StoreForwardSettings {
     pub history_return_window_secs: u32,
 }
 
+/// The node's cryptographic identity + who may administer it remotely.
+///
+/// `private_key` is round-tripped verbatim from the device so that a
+/// `SetConfig(Security)` round-trip doesn't wipe the keypair. It is
+/// intentionally never rendered in the UI, and this struct's `Debug`
+/// impl redacts it.
+#[derive(Clone, Default, PartialEq, Eq)]
+pub struct SecuritySettings {
+    pub public_key: Vec<u8>,
+    pub private_key: Vec<u8>,
+    pub admin_keys: Vec<Vec<u8>>,
+    pub is_managed: bool,
+    pub admin_channel_enabled: bool,
+    pub console: ConsoleAccess,
+}
+
+impl std::fmt::Debug for SecuritySettings {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SecuritySettings")
+            .field("public_key_len", &self.public_key.len())
+            .field("private_key", &"<redacted>")
+            .field("admin_keys_count", &self.admin_keys.len())
+            .field("is_managed", &self.is_managed)
+            .field("admin_channel_enabled", &self.admin_channel_enabled)
+            .field("console", &self.console)
+            .finish()
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ConsoleAccess {
+    pub serial_enabled: bool,
+    pub debug_log_api_enabled: bool,
+}
+
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 pub enum ScreenOrientation {
     #[default]

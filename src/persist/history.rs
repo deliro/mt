@@ -63,6 +63,7 @@ impl HistoryStore {
         )?;
         add_column_if_missing(&conn, "nodes", "is_favorite", "INTEGER NOT NULL DEFAULT 0")?;
         add_column_if_missing(&conn, "nodes", "is_ignored", "INTEGER NOT NULL DEFAULT 0")?;
+        add_column_if_missing(&conn, "nodes", "public_key", "BLOB NOT NULL DEFAULT x''")?;
         Ok(Self { conn })
     }
 
@@ -171,7 +172,7 @@ impl HistoryStore {
         let mut stmt = self.conn.prepare(
             "SELECT node_id, long_name, short_name, role, battery, voltage, snr, rssi, \
                     hops_away, last_heard_ms, latitude, longitude, altitude, saved_at_ms, \
-                    is_favorite, is_ignored
+                    is_favorite, is_ignored, public_key
              FROM nodes
              WHERE my_node = ?
              ORDER BY saved_at_ms DESC",
@@ -195,6 +196,7 @@ impl HistoryStore {
                     saved_at_ms: row.get(13)?,
                     is_favorite: row.get::<_, i64>(14)? != 0,
                     is_ignored: row.get::<_, i64>(15)? != 0,
+                    public_key: row.get::<_, Vec<u8>>(16)?,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -215,8 +217,8 @@ impl HistoryStore {
         self.conn.execute(
             "INSERT INTO nodes (my_node, node_id, long_name, short_name, role, battery, voltage, \
                                 snr, rssi, hops_away, last_heard_ms, latitude, longitude, \
-                                altitude, saved_at_ms, is_favorite, is_ignored)
-             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                                altitude, saved_at_ms, is_favorite, is_ignored, public_key)
+             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
              ON CONFLICT(my_node, node_id) DO UPDATE SET
                 long_name     = excluded.long_name,
                 short_name    = excluded.short_name,
@@ -232,7 +234,10 @@ impl HistoryStore {
                 altitude      = COALESCE(excluded.altitude, nodes.altitude),
                 saved_at_ms   = excluded.saved_at_ms,
                 is_favorite   = excluded.is_favorite,
-                is_ignored    = excluded.is_ignored",
+                is_ignored    = excluded.is_ignored,
+                public_key    = CASE WHEN length(excluded.public_key) > 0 \
+                                     THEN excluded.public_key \
+                                     ELSE nodes.public_key END",
             params![
                 my_node.0,
                 node.id.0,
@@ -251,6 +256,7 @@ impl HistoryStore {
                 saved_at_ms,
                 i64::from(node.is_favorite),
                 i64::from(node.is_ignored),
+                node.public_key.clone(),
             ],
         )?;
         Ok(())
@@ -356,6 +362,7 @@ struct StoredNode {
     saved_at_ms: i64,
     is_favorite: bool,
     is_ignored: bool,
+    public_key: Vec<u8>,
 }
 
 impl StoredNode {
@@ -387,6 +394,7 @@ impl StoredNode {
             position,
             is_favorite: self.is_favorite,
             is_ignored: self.is_ignored,
+            public_key: self.public_key,
         };
         PersistedNode { node, saved_at }
     }

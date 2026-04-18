@@ -39,6 +39,7 @@ fn sample_node(id: u32, name: &str, last_heard: Option<SystemTime>) -> Node {
         }),
         is_favorite: false,
         is_ignored: false,
+        public_key: Vec::new(),
     }
 }
 

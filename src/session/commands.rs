@@ -1,8 +1,8 @@
 use crate::domain::channel::Channel;
 use crate::domain::config::{
     BluetoothSettings, DeviceSettings, DisplaySettings, LoraSettings, MqttSettings,
-    NeighborInfoSettings, NetworkSettings, PositionSettings, PowerSettings, StoreForwardSettings,
-    TelemetrySettings,
+    NeighborInfoSettings, NetworkSettings, PositionSettings, PowerSettings, SecuritySettings,
+    StoreForwardSettings, TelemetrySettings,
 };
 use crate::domain::ids::{ChannelIndex, PacketId};
 use crate::domain::message::Recipient;
@@ -26,9 +26,11 @@ pub enum Command {
     SetTelemetryCfg(TelemetrySettings),
     SetNeighborInfo(NeighborInfoSettings),
     SetStoreForward(StoreForwardSettings),
+    SetSecurity(SecuritySettings),
     SetFixedPosition { latitude_deg: f64, longitude_deg: f64, altitude_m: i32 },
     RemoveFixedPosition,
     Admin(AdminAction),
+    RemoteAdmin { target: crate::domain::ids::NodeId, action: AdminAction },
     SetFavorite { node: crate::domain::ids::NodeId, favorite: bool },
     SetIgnored { node: crate::domain::ids::NodeId, ignored: bool },
     Traceroute { node: crate::domain::ids::NodeId },

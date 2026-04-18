@@ -63,6 +63,7 @@ pub enum Event {
     TelemetryCfgUpdated(crate::domain::config::TelemetrySettings),
     NeighborInfoUpdated(crate::domain::config::NeighborInfoSettings),
     StoreForwardUpdated(crate::domain::config::StoreForwardSettings),
+    SecurityUpdated(crate::domain::config::SecuritySettings),
     StatsUpdated(MeshStats),
     TracerouteResult(crate::domain::traceroute::TracerouteResult),
     TracerouteFailed { target: NodeId, reason: String },
@@ -118,7 +119,9 @@ impl DeviceSession {
                 | Command::SetMqtt(_)
                 | Command::SetTelemetryCfg(_)
                 | Command::SetNeighborInfo(_)
-                | Command::SetStoreForward(_) => {}
+                | Command::SetStoreForward(_)
+                | Command::SetSecurity(_)
+                | Command::RemoteAdmin { .. } => {}
             }
         }
     }
@@ -187,7 +190,9 @@ async fn open_with_cancel(
                     | Command::SetMqtt(_)
                     | Command::SetTelemetryCfg(_)
                     | Command::SetNeighborInfo(_)
-                    | Command::SetStoreForward(_),
+                    | Command::SetStoreForward(_)
+                    | Command::SetSecurity(_)
+                    | Command::RemoteAdmin { .. },
                 ) => {
                     debug!("ignoring command while connecting");
                 }
@@ -273,6 +278,7 @@ struct InitAcc {
     telemetry: Option<crate::domain::config::TelemetrySettings>,
     neighbor_info: Option<crate::domain::config::NeighborInfoSettings>,
     store_forward: Option<crate::domain::config::StoreForwardSettings>,
+    security: Option<crate::domain::config::SecuritySettings>,
     messages: Vec<TextMessage>,
 }
 
@@ -299,6 +305,7 @@ impl InitAcc {
             HandshakeFragment::Telemetry(settings) => self.telemetry = Some(settings),
             HandshakeFragment::NeighborInfo(settings) => self.neighbor_info = Some(settings),
             HandshakeFragment::StoreForward(settings) => self.store_forward = Some(settings),
+            HandshakeFragment::Security(settings) => self.security = Some(settings),
             HandshakeFragment::Message(msg) => self.messages.push(msg),
             HandshakeFragment::ConfigComplete { .. }
             | HandshakeFragment::MessageStateChanged { .. }
@@ -332,6 +339,7 @@ impl InitAcc {
             telemetry: self.telemetry,
             neighbor_info: self.neighbor_info,
             store_forward: self.store_forward,
+            security: self.security,
         }
     }
 }
@@ -526,7 +534,10 @@ async fn handle_config_command(
             send_set_fixed_position(sink, my_node, latitude_deg, longitude_deg, altitude_m).await
         }
         Command::RemoveFixedPosition => send_remove_fixed_position(sink, my_node).await,
-        Command::Admin(action) => send_admin_action(sink, my_node, action).await,
+        Command::Admin(action) => send_admin_action(sink, my_node, my_node, action).await,
+        Command::RemoteAdmin { target, action } => {
+            send_admin_action(sink, my_node, target, action).await
+        }
         Command::SetFavorite { node, favorite } => {
             send_favorite(sink, my_node, node, favorite).await
         }
@@ -538,6 +549,7 @@ async fn handle_config_command(
         Command::SetTelemetryCfg(s) => send_set_telemetry_cfg(sink, my_node, &s).await,
         Command::SetNeighborInfo(s) => send_set_neighbor_info(sink, my_node, &s).await,
         Command::SetStoreForward(s) => send_set_store_forward(sink, my_node, &s).await,
+        Command::SetSecurity(s) => send_set_security(sink, my_node, &s).await,
         Command::Traceroute { .. } => Ok(()),
         Command::Connect(_)
         | Command::Disconnect
@@ -987,6 +999,7 @@ async fn send_ignored(
 async fn send_admin_action(
     sink: SinkRef<'_, impl FrameSink + ?Sized>,
     my_node: NodeId,
+    target: NodeId,
     action: crate::session::commands::AdminAction,
 ) -> Result<(), ConnectError> {
     use crate::session::commands::AdminAction;
@@ -1003,7 +1016,24 @@ async fn send_admin_action(
         payload_variant: Some(variant),
         ..Default::default()
     };
-    send_admin(sink, my_node, admin).await
+    send_admin_to(sink, my_node, target, admin).await
+}
+
+async fn send_set_security(
+    sink: SinkRef<'_, impl FrameSink + ?Sized>,
+    my_node: NodeId,
+    s: &crate::domain::config::SecuritySettings,
+) -> Result<(), ConnectError> {
+    let sec = meshtastic::config::SecurityConfig {
+        public_key: s.public_key.clone(),
+        private_key: s.private_key.clone(),
+        admin_key: s.admin_keys.clone(),
+        is_managed: s.is_managed,
+        admin_channel_enabled: s.admin_channel_enabled,
+        serial_enabled: s.console.serial_enabled,
+        debug_log_api_enabled: s.console.debug_log_api_enabled,
+    };
+    send_config(sink, my_node, meshtastic::config::PayloadVariant::Security(sec)).await
 }
 
 async fn send_config(
@@ -1024,6 +1054,16 @@ async fn send_admin(
     my_node: NodeId,
     admin: meshtastic::AdminMessage,
 ) -> Result<(), ConnectError> {
+    send_admin_to(sink, my_node, my_node, admin).await
+}
+
+async fn send_admin_to(
+    sink: SinkRef<'_, impl FrameSink + ?Sized>,
+    my_node: NodeId,
+    target: NodeId,
+    admin: meshtastic::AdminMessage,
+) -> Result<(), ConnectError> {
+    let remote = target != my_node;
     let mut payload = Vec::with_capacity(admin.encoded_len());
     admin.encode(&mut payload)?;
     let data = meshtastic::Data {
@@ -1034,10 +1074,12 @@ async fn send_admin(
     };
     let packet = meshtastic::MeshPacket {
         from: my_node.0,
-        to: my_node.0,
+        to: target.0,
         channel: 0,
         id: PacketId::random().0,
         want_ack: true,
+        hop_limit: if remote { TRACEROUTE_HOP_LIMIT } else { 0 },
+        hop_start: if remote { TRACEROUTE_HOP_LIMIT } else { 0 },
         payload_variant: Some(meshtastic::mesh_packet::PayloadVariant::Decoded(data)),
         ..Default::default()
     };
@@ -1229,7 +1271,7 @@ fn config_to_events(cfg: meshtastic::Config) -> Vec<IncomingOutcome> {
     use meshtastic::config::PayloadVariant;
     use crate::session::handshake::{
         bluetooth_from_proto, device_from_proto, display_from_proto, lora_from_proto,
-        network_from_proto, position_from_proto, power_from_proto,
+        network_from_proto, position_from_proto, power_from_proto, security_from_proto,
     };
     let Some(variant) = cfg.payload_variant else { return Vec::new() };
     match variant {
@@ -1254,9 +1296,10 @@ fn config_to_events(cfg: meshtastic::Config) -> Vec<IncomingOutcome> {
         PayloadVariant::Bluetooth(b) => {
             vec![IncomingOutcome::Event(Event::BluetoothUpdated(bluetooth_from_proto(&b)))]
         }
-        PayloadVariant::Security(_) | PayloadVariant::Sessionkey(_) | PayloadVariant::DeviceUi(_) => {
-            Vec::new()
+        PayloadVariant::Security(s) => {
+            vec![IncomingOutcome::Event(Event::SecurityUpdated(security_from_proto(&s)))]
         }
+        PayloadVariant::Sessionkey(_) | PayloadVariant::DeviceUi(_) => Vec::new(),
     }
 }
 

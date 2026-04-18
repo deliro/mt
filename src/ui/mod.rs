@@ -4,6 +4,7 @@ pub mod connect;
 pub mod details;
 pub mod fonts;
 pub mod nodes;
+pub mod remote_admin;
 pub mod scan;
 pub mod settings;
 pub mod status;
@@ -50,6 +51,7 @@ pub struct AppState {
     pub settings_ui: settings::SettingsUi,
     pub channels_ui: channels::ChannelsUi,
     pub traceroutes: TracerouteUi,
+    pub remote_admin: remote_admin::RemoteAdminUi,
 }
 
 #[derive(Default)]
@@ -129,6 +131,7 @@ impl App {
             Event::TelemetryCfgUpdated(s) => self.state.snapshot.telemetry = Some(s),
             Event::NeighborInfoUpdated(s) => self.state.snapshot.neighbor_info = Some(s),
             Event::StoreForwardUpdated(s) => self.state.snapshot.store_forward = Some(s),
+            Event::SecurityUpdated(s) => self.state.snapshot.security = Some(s),
             Event::StatsUpdated(stats) => self.state.snapshot.stats.merge(&stats),
             Event::TracerouteResult(result) => {
                 let target = result.target;
@@ -308,6 +311,7 @@ const fn is_activity(ev: &Event) -> bool {
             | Event::TelemetryCfgUpdated(_)
             | Event::NeighborInfoUpdated(_)
             | Event::StoreForwardUpdated(_)
+            | Event::SecurityUpdated(_)
             | Event::StatsUpdated(_)
             | Event::TracerouteResult(_)
             | Event::TracerouteFailed { .. }
@@ -376,6 +380,12 @@ impl eframe::App for App {
             }
         }
         details::render_overlay(ctx, &mut self.state, &self.cmd_tx);
+        remote_admin::render(
+            ctx,
+            &self.state.snapshot,
+            &mut self.state.remote_admin,
+            &self.cmd_tx,
+        );
         ctx.request_repaint_after(std::time::Duration::from_millis(100));
     }
 }
