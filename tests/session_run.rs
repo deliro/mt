@@ -79,8 +79,7 @@ async fn receives_text_after_connect() {
             tokio::spawn(async move {
                 for _ in 0..50 {
                     if let Some(frame) = echo.captured().first()
-                        && let Some(payload) = frame.get(4..)
-                        && let Ok(msg) = meshtastic::ToRadio::decode(payload)
+                        && let Ok(msg) = meshtastic::ToRadio::decode(frame.as_slice())
                         && let Some(meshtastic::to_radio::PayloadVariant::WantConfigId(id)) =
                             msg.payload_variant
                     {

@@ -44,7 +44,8 @@ pub fn start_handshake(transport: TransportKind, config_id: ConfigId) -> Session
 
 #[derive(Clone, Debug)]
 pub enum HandshakeFragment {
-    MyNode { id: NodeId, short: String, long: String, firmware: String },
+    MyNode { id: NodeId },
+    Firmware(String),
     Node(Node),
     Channel(Channel),
     ConfigComplete { id: ConfigId },
@@ -75,11 +76,12 @@ pub fn apply(state: SessionState, event: HandshakeFragment) -> SessionState {
 
 fn apply_handshake(mut acc: HandshakeAcc, event: HandshakeFragment) -> SessionState {
     match event {
-        HandshakeFragment::MyNode { id, short, long, firmware } => {
+        HandshakeFragment::MyNode { id } => {
             acc.my_node = Some(id);
-            acc.short_name = short;
-            acc.long_name = long;
-            acc.firmware = firmware;
+            SessionState::Handshake(acc)
+        }
+        HandshakeFragment::Firmware(version) => {
+            acc.firmware = version;
             SessionState::Handshake(acc)
         }
         HandshakeFragment::Node(node) => {
@@ -121,9 +123,9 @@ fn apply_handshake(mut acc: HandshakeAcc, event: HandshakeFragment) -> SessionSt
 
 fn apply_ready(mut snap: DeviceSnapshot, event: HandshakeFragment) -> SessionState {
     match event {
-        HandshakeFragment::MyNode { .. } | HandshakeFragment::ConfigComplete { .. } => {
-            SessionState::Ready(snap)
-        }
+        HandshakeFragment::MyNode { .. }
+        | HandshakeFragment::Firmware(_)
+        | HandshakeFragment::ConfigComplete { .. } => SessionState::Ready(snap),
         HandshakeFragment::Node(node) => {
             snap.nodes.insert(node.id, node);
             SessionState::Ready(snap)

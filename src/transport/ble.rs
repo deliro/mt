@@ -46,11 +46,11 @@ pub async fn scan(duration: Duration) -> Result<Vec<Discovered>, ConnectError> {
     let mut out = Vec::with_capacity(peripherals.len());
     for p in peripherals {
         let Ok(Some(props)) = p.properties().await else { continue };
-        let is_paired = p.is_connected().await.unwrap_or(false);
-        let addr = BleAddress::new(p.address().to_string());
+        let is_connected = p.is_connected().await.unwrap_or(false);
+        let addr = BleAddress::new(p.id().to_string());
         let name = props.local_name.clone().unwrap_or_else(|| "Meshtastic".into());
-        debug!(%name, addr = %addr.as_str(), connected = is_paired, "ble scan row");
-        out.push(Discovered { name, address: addr, rssi_dbm: props.rssi, is_paired });
+        debug!(%name, id = %addr.as_str(), connected = is_connected, "ble scan row");
+        out.push(Discovered { name, address: addr, rssi_dbm: props.rssi, is_paired: is_connected });
     }
     info!(count = out.len(), "ble scan finished");
     Ok(out)
@@ -120,7 +120,7 @@ async fn find_in_adapter(
         adapter.peripherals().await.map_err(|e| ConnectError::BleGatt(e.to_string()))?;
     Ok(peripherals
         .into_iter()
-        .find(|p| p.address().to_string().eq_ignore_ascii_case(address.as_str())))
+        .find(|p| p.id().to_string().eq_ignore_ascii_case(address.as_str())))
 }
 
 async fn first_adapter(manager: &Manager) -> Result<Adapter, ConnectError> {
@@ -196,25 +196,44 @@ async fn read_loop(
     if !drain_from_radio(&peripheral, &from_radio, &in_tx).await {
         return;
     }
-    while notifications.next().await.is_some() {
-        if !drain_from_radio(&peripheral, &from_radio, &in_tx).await {
-            return;
+    let mut poll = tokio::time::interval(Duration::from_millis(250));
+    poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    let _ = poll.tick().await;
+    loop {
+        tokio::select! {
+            notif = notifications.next() => {
+                if notif.is_none() {
+                    return;
+                }
+                if !drain_from_radio(&peripheral, &from_radio, &in_tx).await {
+                    return;
+                }
+            }
+            _ = poll.tick() => {
+                if !drain_from_radio(&peripheral, &from_radio, &in_tx).await {
+                    return;
+                }
+            }
         }
     }
 }
+
+const DRAIN_BURST: usize = 8;
 
 async fn drain_from_radio(
     peripheral: &PlatformPeripheral,
     from_radio: &Characteristic,
     in_tx: &mpsc::UnboundedSender<Result<Vec<u8>, TransportError>>,
 ) -> bool {
-    loop {
+    for _ in 0..DRAIN_BURST {
         match peripheral.read(from_radio).await {
             Ok(bytes) if bytes.is_empty() => return true,
             Ok(bytes) => {
+                debug!(len = bytes.len(), "ble read fromRadio");
                 if in_tx.send(Ok(bytes)).is_err() {
                     return false;
                 }
+                tokio::task::yield_now().await;
             }
             Err(e) => {
                 let _ = in_tx.send(Err(TransportError::Ble(e.to_string())));
@@ -222,6 +241,7 @@ async fn drain_from_radio(
             }
         }
     }
+    true
 }
 
 async fn write_loop(
@@ -229,11 +249,21 @@ async fn write_loop(
     peripheral: PlatformPeripheral,
     to_radio: Characteristic,
 ) {
+    let write_type = preferred_write_type(&to_radio);
     while let Some(frame) = out_rx.recv().await {
-        if let Err(e) = peripheral.write(&to_radio, &frame, WriteType::WithoutResponse).await {
+        debug!(len = frame.len(), ?write_type, "ble write toRadio");
+        if let Err(e) = peripheral.write(&to_radio, &frame, write_type).await {
             warn!(%e, "ble write failed");
             break;
         }
+    }
+}
+
+fn preferred_write_type(to_radio: &Characteristic) -> WriteType {
+    if to_radio.properties.contains(CharPropFlags::WRITE) {
+        WriteType::WithResponse
+    } else {
+        WriteType::WithoutResponse
     }
 }
 

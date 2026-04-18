@@ -11,7 +11,6 @@ use tokio::sync::mpsc;
 use tokio::time::{MissedTickBehavior, interval, sleep};
 use tracing::{debug, warn};
 
-use crate::codec::frame::encode as encode_frame;
 use crate::domain::channel::{Channel, ChannelRole};
 use crate::domain::ids::{BROADCAST_NODE, ChannelIndex, ConfigId, NodeId, PacketId};
 use crate::domain::message::{DeliveryState, Direction, Recipient, TextMessage};
@@ -278,8 +277,7 @@ async fn send_text(
     };
     let mut buf = Vec::with_capacity(msg.encoded_len());
     msg.encode(&mut buf)?;
-    let frame = encode_frame(&buf)?;
-    sink.send(frame).await?;
+    sink.send(buf).await?;
     Ok(id)
 }
 
@@ -293,8 +291,7 @@ async fn send_heartbeat(
     };
     let mut buf = Vec::with_capacity(msg.encoded_len());
     msg.encode(&mut buf)?;
-    let frame = encode_frame(&buf)?;
-    sink.send(frame).await?;
+    sink.send(buf).await?;
     Ok(())
 }
 

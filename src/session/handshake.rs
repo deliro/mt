@@ -4,7 +4,6 @@ use futures::{SinkExt, StreamExt};
 use prost::Message;
 use tokio::time::timeout;
 
-use crate::codec::frame::encode as encode_frame;
 use crate::domain::ids::{ConfigId, NodeId};
 use crate::domain::node::{Node, NodeRole, Position};
 use crate::domain::profile::TransportKind;
@@ -14,7 +13,7 @@ use crate::error::ConnectError;
 use crate::proto::meshtastic;
 use crate::transport::BoxedTransport;
 
-pub const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
+pub const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(60);
 
 pub async fn run_handshake(
     mut transport: BoxedTransport,
@@ -26,8 +25,7 @@ pub async fn run_handshake(
     };
     let mut buf = Vec::with_capacity(want.encoded_len());
     want.encode(&mut buf)?;
-    let frame = encode_frame(&buf)?;
-    transport.send(frame).await?;
+    transport.send(buf).await?;
 
     let initial = start_handshake(transport_kind, config_id);
 
@@ -65,20 +63,12 @@ fn fragments_from_radio(msg: meshtastic::FromRadio) -> Vec<HandshakeFragment> {
     use meshtastic::from_radio::PayloadVariant;
     let Some(variant) = msg.payload_variant else { return Vec::new() };
     match variant {
-        PayloadVariant::MyInfo(info) => vec![HandshakeFragment::MyNode {
-            id: NodeId(info.my_node_num),
-            short: String::new(),
-            long: String::new(),
-            firmware: String::new(),
-        }],
+        PayloadVariant::MyInfo(info) => {
+            vec![HandshakeFragment::MyNode { id: NodeId(info.my_node_num) }]
+        }
         PayloadVariant::NodeInfo(ni) => vec![HandshakeFragment::Node(node_from_proto(&ni))],
         PayloadVariant::Channel(ch) => channel_fragments(ch),
-        PayloadVariant::Metadata(meta) => vec![HandshakeFragment::MyNode {
-            id: NodeId(0),
-            short: String::new(),
-            long: String::new(),
-            firmware: meta.firmware_version,
-        }],
+        PayloadVariant::Metadata(meta) => vec![HandshakeFragment::Firmware(meta.firmware_version)],
         PayloadVariant::ConfigCompleteId(id) => {
             vec![HandshakeFragment::ConfigComplete { id: ConfigId(id) }]
         }
