@@ -44,6 +44,7 @@ pub enum Section {
 pub enum PendingClear {
     Messages,
     Nodes,
+    Tiles,
     All,
 }
 
@@ -55,6 +56,7 @@ pub struct SettingsUi {
     pub pending_clear: Option<PendingClear>,
     pub stored_messages: Option<i64>,
     pub stored_nodes: Option<i64>,
+    pub stored_tile_bytes: Option<u64>,
     pub previous_fixed_enabled: bool,
     pub pending_admin: Option<AdminAction>,
     pub security_new_admin_key: String,
@@ -231,8 +233,12 @@ fn admin_confirm_modal(
 fn storage_section(ui: &mut egui::Ui, s: &mut SettingsUi) {
     let msgs = s.stored_messages.map_or_else(|| "?".into(), |n| n.to_string());
     let nodes = s.stored_nodes.map_or_else(|| "?".into(), |n| n.to_string());
+    let tiles = s
+        .stored_tile_bytes
+        .map_or_else(|| "?".into(), format_bytes);
     ui.label(format!("Stored messages for this device: {msgs}"));
     ui.label(format!("Stored nodes for this device: {nodes}"));
+    ui.label(format!("Map-tile cache: {tiles}"));
     ui.add_space(4.0);
     ui.horizontal(|ui| {
         if ui.button("Clear messages").clicked() {
@@ -241,11 +247,29 @@ fn storage_section(ui: &mut egui::Ui, s: &mut SettingsUi) {
         if ui.button("Clear nodes").clicked() {
             s.pending_clear = Some(PendingClear::Nodes);
         }
+        if ui.button("Clear map tiles").clicked() {
+            s.pending_clear = Some(PendingClear::Tiles);
+        }
         if ui.button("Clear everything").clicked() {
             s.pending_clear = Some(PendingClear::All);
         }
     });
     ui.weak("Clears only the on-disk cache for this connected device. The mesh keeps its own copy.");
+}
+
+fn format_bytes(n: u64) -> String {
+    const K: u64 = 1024;
+    const M: u64 = K * K;
+    const G: u64 = M * K;
+    if n >= G {
+        format!("{:.1} GB", n as f64 / G as f64)
+    } else if n >= M {
+        format!("{:.1} MB", n as f64 / M as f64)
+    } else if n >= K {
+        format!("{:.1} KB", n as f64 / K as f64)
+    } else {
+        format!("{n} B")
+    }
 }
 
 fn collapsible<R>(ui: &mut egui::Ui, title: &str, add: impl FnOnce(&mut egui::Ui) -> R) {

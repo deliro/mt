@@ -1,5 +1,6 @@
 use std::cmp::Ordering;
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::time::SystemTime;
 
 use eframe::egui;
@@ -8,6 +9,7 @@ use walkers::Tiles as _;
 use crate::domain::ids::NodeId;
 use crate::domain::node::Node;
 use crate::domain::snapshot::DeviceSnapshot;
+use crate::ui::map_tiles::SqliteTiles;
 
 #[derive(Default, Copy, Clone, Eq, PartialEq)]
 pub enum ViewKind {
@@ -21,7 +23,7 @@ pub struct TopologyUi {
     pub signal_pan: egui::Vec2,
     pub signal_zoom: f32,
     pub map_memory: walkers::MapMemory,
-    pub map_tiles: Option<walkers::HttpTiles>,
+    pub map_tiles: Option<SqliteTiles>,
     /// Set to `true` once we've centred the map on `my_node`'s GPS
     /// position at least once — prevents repeatedly forcing the camera
     /// back there as the user pans.
@@ -50,12 +52,13 @@ pub fn render(
     snapshot: &DeviceSnapshot,
     state: &mut TopologyUi,
     detail_node: &mut Option<NodeId>,
+    tile_db_path: Option<PathBuf>,
 ) {
     toolbar(ui, state, snapshot);
     ui.separator();
     match state.view {
         ViewKind::Signal => render_signal(ui, snapshot, state, detail_node),
-        ViewKind::Geographic => render_geographic(ui, snapshot, state, detail_node),
+        ViewKind::Geographic => render_geographic(ui, snapshot, state, detail_node, tile_db_path),
     }
 }
 
@@ -161,13 +164,14 @@ fn render_geographic(
     snapshot: &DeviceSnapshot,
     state: &mut TopologyUi,
     detail_node: &mut Option<NodeId>,
+    tile_db_path: Option<PathBuf>,
 ) {
     egui::SidePanel::right("topology_no_gps")
         .resizable(true)
         .default_width(220.0)
         .show_inside(ui, |ui| render_no_gps(ui, snapshot, detail_node));
     egui::CentralPanel::default().show_inside(ui, |ui| {
-        render_geographic_plane(ui, snapshot, state, detail_node);
+        render_geographic_plane(ui, snapshot, state, detail_node, tile_db_path);
     });
 }
 
@@ -176,9 +180,10 @@ fn render_geographic_plane(
     snapshot: &DeviceSnapshot,
     state: &mut TopologyUi,
     detail_node: &mut Option<NodeId>,
+    tile_db_path: Option<PathBuf>,
 ) {
     if state.map_tiles.is_none() {
-        state.map_tiles = Some(build_map_tiles(ui.ctx()));
+        state.map_tiles = Some(SqliteTiles::open(tile_db_path, ui.ctx().clone()));
     }
 
     let reference = reference_position(snapshot);
@@ -200,20 +205,6 @@ fn render_geographic_plane(
     let response = ui.add(map);
 
     draw_attribution(ui, response.rect, state.map_tiles.as_ref());
-}
-
-fn build_map_tiles(ctx: &egui::Context) -> walkers::HttpTiles {
-    let cache = directories::ProjectDirs::from("dev", "", "mt")
-        .map(|dirs| dirs.cache_dir().join("map-tiles"));
-    let options = walkers::HttpOptions {
-        cache,
-        user_agent: Some(walkers::HeaderValue::from_static(concat!(
-            env!("CARGO_PKG_NAME"),
-            "/",
-            env!("CARGO_PKG_VERSION"),
-        ))),
-    };
-    walkers::HttpTiles::with_options(walkers::sources::OpenStreetMap, options, ctx.clone())
 }
 
 fn my_node_position(snapshot: &DeviceSnapshot) -> Option<walkers::Position> {
@@ -252,7 +243,7 @@ fn reference_position(snapshot: &DeviceSnapshot) -> walkers::Position {
 fn draw_attribution(
     ui: &egui::Ui,
     rect: egui::Rect,
-    tiles: Option<&walkers::HttpTiles>,
+    tiles: Option<&SqliteTiles>,
 ) {
     let Some(tiles) = tiles else { return };
     let attribution = tiles.attribution();

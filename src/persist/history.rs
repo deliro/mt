@@ -16,6 +16,7 @@ const SETTING_ALERTS: &str = "alerts";
 
 pub struct HistoryStore {
     conn: Connection,
+    path: PathBuf,
 }
 
 pub struct PersistedNode {
@@ -71,9 +72,22 @@ impl HistoryStore {
             CREATE TABLE IF NOT EXISTS settings (
                 k TEXT PRIMARY KEY,
                 v TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS map_tiles (
+                zoom          INTEGER NOT NULL,
+                tile_x        INTEGER NOT NULL,
+                tile_y        INTEGER NOT NULL,
+                bytes         BLOB    NOT NULL,
+                fetched_at_ms INTEGER NOT NULL,
+                PRIMARY KEY (zoom, tile_x, tile_y)
             );",
         )?;
-        Ok(Self { conn })
+        Ok(Self { conn, path: path.to_path_buf() })
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.path
     }
 
     // ---- Profiles + settings ----
@@ -347,6 +361,23 @@ impl HistoryStore {
 
     pub fn clear_nodes(&self, my_node: NodeId) -> Result<usize, PersistError> {
         let rows = self.conn.execute("DELETE FROM nodes WHERE my_node = ?", [my_node.0])?;
+        Ok(rows)
+    }
+
+    // ---- Map tiles ----
+
+    pub fn tile_cache_size_bytes(&self) -> Result<u64, PersistError> {
+        let size: i64 = self.conn.query_row(
+            "SELECT COALESCE(SUM(LENGTH(bytes)), 0) FROM map_tiles",
+            [],
+            |r| r.get(0),
+        )?;
+        Ok(size.max(0).unsigned_abs())
+    }
+
+    pub fn clear_tiles(&self) -> Result<usize, PersistError> {
+        let rows = self.conn.execute("DELETE FROM map_tiles", [])?;
+        let _ = self.conn.execute("VACUUM", []);
         Ok(rows)
     }
 }

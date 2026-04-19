@@ -7,6 +7,7 @@ pub mod firmware;
 pub mod fonts;
 pub mod inspector;
 pub mod logs;
+pub mod map_tiles;
 pub mod nodes;
 pub mod reconnect;
 pub mod remote_admin;
@@ -376,11 +377,13 @@ impl App {
         let Some(store) = self.store.as_ref() else {
             self.state.settings_ui.stored_messages = None;
             self.state.settings_ui.stored_nodes = None;
+            self.state.settings_ui.stored_tile_bytes = None;
             return;
         };
         let my = self.state.snapshot.my_node;
         self.state.settings_ui.stored_messages = store.message_count(my).ok();
         self.state.settings_ui.stored_nodes = store.node_count(my).ok();
+        self.state.settings_ui.stored_tile_bytes = store.tile_cache_size_bytes().ok();
     }
 
     fn handle_clear(&mut self, kind: settings::PendingClear) {
@@ -389,6 +392,7 @@ impl App {
         let my = self.state.snapshot.my_node;
         let clear_messages = matches!(kind, PendingClear::Messages | PendingClear::All);
         let clear_nodes = matches!(kind, PendingClear::Nodes | PendingClear::All);
+        let clear_tiles = matches!(kind, PendingClear::Tiles | PendingClear::All);
         if clear_messages {
             if let Err(e) = store.clear_messages(my) {
                 warn!(%e, "clear messages failed");
@@ -405,6 +409,13 @@ impl App {
                     .nodes
                     .retain(|id, _| self.state.nodes_ui.seen_live.contains(id));
                 self.state.nodes_ui.persisted_saved_at.clear();
+            }
+        }
+        if clear_tiles {
+            if let Err(e) = store.clear_tiles() {
+                warn!(%e, "clear tiles failed");
+            } else if let Some(tiles) = self.state.topology_ui.map_tiles.as_mut() {
+                tiles.purge_memory();
             }
         }
     }
@@ -705,6 +716,7 @@ impl App {
                 });
             }
             Tab::Topology => {
+                let tile_db_path = self.store.as_ref().map(|s| s.path().to_path_buf());
                 egui::CentralPanel::default().show(ctx, |ui| {
                     let AppState {
                         snapshot,
@@ -712,7 +724,7 @@ impl App {
                         detail_node,
                         ..
                     } = &mut self.state;
-                    topology::render(ui, snapshot, topology_ui, detail_node);
+                    topology::render(ui, snapshot, topology_ui, detail_node, tile_db_path);
                 });
             }
         }
