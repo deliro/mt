@@ -287,6 +287,7 @@ impl walkers::Plugin for NodesOverlay<'_> {
                 .project(walkers::Position::from_lat_lon(p.latitude_deg, p.longitude_deg));
             placements.push((*id, vec.to_pos2()));
         }
+        spread_overlapping(&mut placements);
 
         let self_pos = placements
             .iter()
@@ -556,6 +557,75 @@ fn draw_node(
         egui::FontId::monospace(11.0),
         style.visuals.text_color(),
     );
+}
+
+/// Detect nodes whose projected pixel positions collide and fan them
+/// out around a shared centroid on a small ring. Same-GPS nodes (the
+/// common cause — several devices at one location) end up on a neat
+/// circle so every circle + label stays legible.
+///
+/// Simple single-pass clustering: for each not-yet-clustered node,
+/// pull in every later node within `MERGE_DIST` pixels of it. For the
+/// same-coord case that's all we need.
+fn spread_overlapping(placements: &mut [(NodeId, egui::Pos2)]) {
+    const MERGE_DIST: f32 = 22.0;
+    let n = placements.len();
+    if n < 2 {
+        return;
+    }
+    let mut assigned: Vec<bool> = vec![false; n];
+
+    for start in 0..n {
+        match assigned.get(start) {
+            Some(true) | None => continue,
+            Some(false) => {}
+        }
+        let Some(start_pos) = placements.get(start).map(|(_, p)| *p) else { continue };
+        let mut cluster: Vec<usize> = vec![start];
+        if let Some(slot) = assigned.get_mut(start) {
+            *slot = true;
+        }
+        for j in start.saturating_add(1)..n {
+            if matches!(assigned.get(j), Some(true) | None) {
+                continue;
+            }
+            let Some(p) = placements.get(j).map(|(_, p)| *p) else { continue };
+            if start_pos.distance(p) < MERGE_DIST {
+                cluster.push(j);
+                if let Some(slot) = assigned.get_mut(j) {
+                    *slot = true;
+                }
+            }
+        }
+        if cluster.len() < 2 {
+            continue;
+        }
+        // Stable seat assignment — sort cluster by NodeId so the same
+        // node lands on the same angle across frames.
+        cluster.sort_by_key(|i| placements.get(*i).map_or(0, |(id, _)| id.0));
+
+        let mut sum_x = 0.0_f32;
+        let mut sum_y = 0.0_f32;
+        for &i in &cluster {
+            if let Some((_, p)) = placements.get(i) {
+                sum_x += p.x;
+                sum_y += p.y;
+            }
+        }
+        let count_f = cluster.len() as f32;
+        let cx = sum_x / count_f;
+        let cy = sum_y / count_f;
+        let ring_r = (count_f * 4.5).max(16.0);
+        for (k, &i) in cluster.iter().enumerate() {
+            let theta = (k as f32 / count_f) * std::f32::consts::TAU;
+            if let Some(slot) = placements.get_mut(i) {
+                slot.1 = egui::pos2(
+                    ring_r.mul_add(theta.cos(), cx),
+                    ring_r.mul_add(theta.sin(), cy),
+                );
+            }
+        }
+    }
 }
 
 fn node_radius(is_self: bool, hops: Option<u8>) -> f32 {
