@@ -102,15 +102,21 @@ jobs:
         run: |
           set -euo pipefail
           git clone "https://x-access-token:${GH_TOKEN}@github.com/deliro/homebrew-tap" tap
-          mkdir -p tap/Formula
-          cp out/Formula/mt.rb tap/Formula/mt.rb
           cd tap
+          # Empty repos clone with no HEAD; pick a default branch name.
+          BRANCH=$(git symbolic-ref --short HEAD 2>/dev/null || echo main)
+          git checkout -B "$BRANCH"
+          mkdir -p Formula
+          cp ../out/Formula/mt.rb Formula/mt.rb
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git config user.name "github-actions[bot]"
-          if git diff --quiet; then
+          git add Formula/mt.rb
+          # `git diff --cached --quiet` checks the staged tree against HEAD;
+          # in an empty repo there is no HEAD, so the command exits non-zero
+          # (= changes present) which is what we want for the initial commit.
+          if git diff --cached --quiet 2>/dev/null; then
             echo "Formula unchanged"
             exit 0
           fi
-          git add Formula/mt.rb
           git commit -m "mt ${TAG}"
-          git push
+          git push -u origin "$BRANCH"

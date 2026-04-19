@@ -15,11 +15,15 @@ permissions:
 jobs:
   submit:
     name: submit to winget-pkgs
-    runs-on: windows-latest
+    runs-on: ubuntu-latest
+    env:
+      PKG_ID: Deliro.Mt
+      PUBLISHER: Deliro
+      PACKAGE_NAME: mt
+      WINGET_TOKEN: ${{ secrets.WINGET_PAT }}
     steps:
       - name: Resolve tag
         id: t
-        shell: bash
         env:
           INPUT_TAG: ${{ github.event.inputs.tag }}
           RELEASE_TAG: ${{ github.event.release.tag_name }}
@@ -29,11 +33,125 @@ jobs:
             echo "No tag resolved" >&2; exit 1
           fi
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+          echo "date=$(date -u +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
 
-      - uses: vedantmgoyal9/winget-releaser@main
-        with:
-          identifier: Deliro.Mt
-          version: ${{ steps.t.outputs.tag }}
-          installers-regex: '\.exe$'
-          token: ${{ secrets.WINGET_PAT }}
-          fork-user: deliro
+      - name: Download installer + compute sha256
+        id: sha
+        env:
+          TAG: ${{ steps.t.outputs.tag }}
+        run: |
+          set -euo pipefail
+          url="https://github.com/deliro/mt/releases/download/${TAG}/mt-x86_64-pc-windows-msvc.exe"
+          curl -fsSL -o mt.exe "$url"
+          # winget manifests want uppercase hex.
+          sha=$(sha256sum mt.exe | awk '{print toupper($1)}')
+          echo "sha256=$sha" >> "$GITHUB_OUTPUT"
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+
+      - name: Render manifests
+        env:
+          TAG: ${{ steps.t.outputs.tag }}
+          VERSION: ${{ steps.t.outputs.version }}
+          DATE: ${{ steps.t.outputs.date }}
+          SHA: ${{ steps.sha.outputs.sha256 }}
+          URL: ${{ steps.sha.outputs.url }}
+        run: |
+          set -euo pipefail
+          dir="manifests/d/${PUBLISHER}/Mt/${VERSION}"
+          mkdir -p "$dir"
+
+          cat > "$dir/${PKG_ID}.yaml" <<EOF
+          PackageIdentifier: ${PKG_ID}
+          PackageVersion: ${VERSION}
+          DefaultLocale: en-US
+          ManifestType: version
+          ManifestVersion: 1.6.0
+          EOF
+
+          cat > "$dir/${PKG_ID}.locale.en-US.yaml" <<EOF
+          PackageIdentifier: ${PKG_ID}
+          PackageVersion: ${VERSION}
+          PackageLocale: en-US
+          Publisher: ${PUBLISHER}
+          PublisherUrl: https://github.com/deliro
+          PublisherSupportUrl: https://github.com/deliro/mt/issues
+          PackageName: ${PACKAGE_NAME}
+          PackageUrl: https://github.com/deliro/mt
+          License: Apache-2.0 OR MIT
+          LicenseUrl: https://github.com/deliro/mt/blob/master/LICENSE
+          ShortDescription: Native desktop client for Meshtastic radios (BLE / Serial / TCP)
+          Moniker: mt
+          Tags:
+            - meshtastic
+            - lora
+            - ham-radio
+            - ble
+          ReleaseNotesUrl: https://github.com/deliro/mt/releases/tag/${TAG}
+          ManifestType: defaultLocale
+          ManifestVersion: 1.6.0
+          EOF
+
+          cat > "$dir/${PKG_ID}.installer.yaml" <<EOF
+          PackageIdentifier: ${PKG_ID}
+          PackageVersion: ${VERSION}
+          InstallerType: portable
+          Commands:
+            - mt
+          ReleaseDate: ${DATE}
+          Installers:
+            - Architecture: x64
+              InstallerUrl: ${URL}
+              InstallerSha256: ${SHA}
+          ManifestType: installer
+          ManifestVersion: 1.6.0
+          EOF
+
+          echo "--- generated manifests ---"
+          find "$dir" -type f -exec sh -c 'echo "=== $1 ==="; cat "$1"' _ {} \;
+
+      - name: Submit PR to microsoft/winget-pkgs
+        env:
+          GH_TOKEN: ${{ env.WINGET_TOKEN }}
+          TAG: ${{ steps.t.outputs.tag }}
+          VERSION: ${{ steps.t.outputs.version }}
+        run: |
+          set -euo pipefail
+          # Make sure our user has a fork of microsoft/winget-pkgs. The first
+          # call creates it if missing; subsequent calls are no-ops.
+          gh repo fork microsoft/winget-pkgs --clone=false --remote=false || true
+
+          # Clone the fork (sparse — winget-pkgs is huge), branch, drop in
+          # only our manifest files, push, open PR.
+          fork="deliro/winget-pkgs"
+          git clone --depth 1 --filter=blob:none --sparse \
+            "https://x-access-token:${GH_TOKEN}@github.com/${fork}" wp
+          cd wp
+          git sparse-checkout init --cone
+          git sparse-checkout set "manifests/d/${PUBLISHER}/Mt"
+
+          # Sync the fork's default branch with upstream so our PR is clean.
+          git remote add upstream https://github.com/microsoft/winget-pkgs
+          git fetch --depth 1 upstream master
+          git reset --hard upstream/master
+
+          branch="${PKG_ID}-${VERSION}"
+          git checkout -B "$branch"
+
+          mkdir -p "manifests/d/${PUBLISHER}/Mt/${VERSION}"
+          cp -r "../manifests/d/${PUBLISHER}/Mt/${VERSION}"/* \
+                "manifests/d/${PUBLISHER}/Mt/${VERSION}/"
+
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
+          git add "manifests/d/${PUBLISHER}/Mt/${VERSION}"
+          git commit -m "${PKG_ID} ${VERSION}"
+          git push --force-with-lease -u origin "$branch"
+
+          gh pr create \
+            --repo microsoft/winget-pkgs \
+            --base master \
+            --head "deliro:${branch}" \
+            --title "${PKG_ID} version ${VERSION}" \
+            --body "Submission of ${PKG_ID} ${VERSION} via release automation. Source: https://github.com/deliro/mt/releases/tag/${TAG}" \
+            || echo "PR may already exist for this version"
