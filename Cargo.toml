@@ -1,6 +1,6 @@
 [package]
 name = "mt"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 publish = false
 description = "Native desktop client for Meshtastic radios (BLE / Serial / TCP)"
