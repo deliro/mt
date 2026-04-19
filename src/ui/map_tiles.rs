@@ -1,6 +1,6 @@
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
-use std::sync::mpsc;
+use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -9,6 +9,7 @@ use eframe::egui::ColorImage;
 use image::ImageError;
 use lru::LruCache;
 use rusqlite::{Connection, OptionalExtension, params};
+use tokio::sync::{Semaphore, mpsc};
 use tracing::{error, warn};
 use walkers::sources::{Attribution, OpenStreetMap, TileSource};
 use walkers::{Texture, TextureWithUv, TileId, Tiles};
@@ -16,6 +17,10 @@ use walkers::{Texture, TextureWithUv, TileId, Tiles};
 const MEMORY_CAPACITY: usize = 512;
 const HTTP_TIMEOUT: Duration = Duration::from_secs(15);
 const USER_AGENT: &str = concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION"));
+/// Max concurrent HTTP fetches. OSM usage policy discourages massive
+/// parallelism from a single client; 8 is comfortable and matches what
+/// modern browsers do per origin.
+const MAX_PARALLEL: usize = 8;
 const UV_UNIT: egui::Rect =
     egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
 /// OSM serves tiles up to zoom 19. Walkers' internal zoom cap is 26,
@@ -32,8 +37,8 @@ pub struct SqliteTiles {
     attribution: Attribution,
     tile_size: u32,
     memory: LruCache<TileId, Option<Texture>>,
-    request_tx: mpsc::Sender<TileId>,
-    tile_rx: mpsc::Receiver<(TileId, ColorImage)>,
+    request_tx: mpsc::UnboundedSender<TileId>,
+    tile_rx: mpsc::UnboundedReceiver<(TileId, ColorImage)>,
     ctx: egui::Context,
 }
 
@@ -43,8 +48,8 @@ impl SqliteTiles {
         let attribution = source.attribution();
         let tile_size = source.tile_size();
 
-        let (request_tx, request_rx) = mpsc::channel::<TileId>();
-        let (tile_tx, tile_rx) = mpsc::channel::<(TileId, ColorImage)>();
+        let (request_tx, request_rx) = mpsc::unbounded_channel::<TileId>();
+        let (tile_tx, tile_rx) = mpsc::unbounded_channel::<(TileId, ColorImage)>();
         let ctx_thread = ctx.clone();
 
         let spawn = thread::Builder::new()
@@ -107,8 +112,8 @@ impl Tiles for SqliteTiles {
 
 fn run_loop(
     db_path: Option<PathBuf>,
-    request_rx: mpsc::Receiver<TileId>,
-    tile_tx: mpsc::Sender<(TileId, ColorImage)>,
+    mut request_rx: mpsc::UnboundedReceiver<TileId>,
+    tile_tx: mpsc::UnboundedSender<(TileId, ColorImage)>,
     ctx: egui::Context,
 ) {
     let rt = match tokio::runtime::Builder::new_current_thread().enable_all().build() {
@@ -138,42 +143,62 @@ fn run_loop(
     });
 
     rt.block_on(async move {
-        while let Ok(tile_id) = request_rx.recv() {
-            let bytes = {
-                let hit = conn.as_ref().and_then(|c| match load_bytes(c, tile_id) {
-                    Ok(opt) => opt,
-                    Err(e) => {
-                        warn!(?tile_id, %e, "tile select failed");
-                        None
-                    }
-                });
-                if let Some(bytes) = hit {
-                    bytes
-                } else {
-                    match fetch(&client, tile_id).await {
-                        Ok(bytes) => {
-                            if let Some(c) = conn.as_ref()
-                                && let Err(e) = save_bytes(c, tile_id, &bytes)
-                            {
-                                warn!(?tile_id, %e, "tile insert failed");
-                            }
-                            bytes
-                        }
+        let (http_tx, mut http_rx) = mpsc::unbounded_channel::<(TileId, Vec<u8>)>();
+        let sem = Arc::new(Semaphore::new(MAX_PARALLEL));
+
+        loop {
+            tokio::select! {
+                req = request_rx.recv() => {
+                    let Some(tile_id) = req else { break };
+                    let hit = conn.as_ref().and_then(|c| match load_bytes(c, tile_id) {
+                        Ok(opt) => opt,
                         Err(e) => {
-                            warn!(?tile_id, %e, "tile fetch failed");
-                            continue;
+                            warn!(?tile_id, %e, "tile select failed");
+                            None
                         }
+                    });
+                    if let Some(bytes) = hit {
+                        match decode(&bytes) {
+                            Ok(image) => {
+                                if tile_tx.send((tile_id, image)).is_err() {
+                                    break;
+                                }
+                                ctx.request_repaint();
+                            }
+                            Err(e) => warn!(?tile_id, %e, "tile decode failed"),
+                        }
+                    } else {
+                        let sem = sem.clone();
+                        let client = client.clone();
+                        let http_tx = http_tx.clone();
+                        tokio::spawn(async move {
+                            let Ok(_permit) = sem.acquire_owned().await else { return };
+                            match fetch(&client, tile_id).await {
+                                Ok(bytes) => {
+                                    let _ = http_tx.send((tile_id, bytes));
+                                }
+                                Err(e) => warn!(?tile_id, %e, "tile fetch failed"),
+                            }
+                        });
                     }
                 }
-            };
-            match decode(&bytes) {
-                Ok(image) => {
-                    if tile_tx.send((tile_id, image)).is_err() {
-                        break;
+                Some((tile_id, bytes)) = http_rx.recv() => {
+                    if let Some(c) = conn.as_ref()
+                        && let Err(e) = save_bytes(c, tile_id, &bytes)
+                    {
+                        warn!(?tile_id, %e, "tile insert failed");
                     }
-                    ctx.request_repaint();
+                    match decode(&bytes) {
+                        Ok(image) => {
+                            if tile_tx.send((tile_id, image)).is_err() {
+                                break;
+                            }
+                            ctx.request_repaint();
+                        }
+                        Err(e) => warn!(?tile_id, %e, "tile decode failed"),
+                    }
                 }
-                Err(e) => warn!(?tile_id, %e, "tile decode failed"),
+                else => break,
             }
         }
     });
