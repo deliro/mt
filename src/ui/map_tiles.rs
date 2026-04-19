@@ -93,15 +93,22 @@ impl Tiles for SqliteTiles {
             return None;
         }
 
-        if let Some(slot) = self.memory.get(&tile_id) {
-            return slot
-                .as_ref()
-                .map(|texture| TextureWithUv { texture: texture.clone(), uv: UV_UNIT });
+        match self.memory.get(&tile_id) {
+            Some(Some(texture)) => {
+                return Some(TextureWithUv { texture: texture.clone(), uv: UV_UNIT });
+            }
+            Some(None) => {
+                // Fetch already in flight. Fall through to the
+                // ancestor fallback so the tile slot isn't just
+                // black while we wait.
+            }
+            None => {
+                let _ = self.memory.put(tile_id, None);
+                let _ = self.request_tx.send(tile_id);
+            }
         }
 
-        let _ = self.memory.put(tile_id, None);
-        let _ = self.request_tx.send(tile_id);
-        None
+        ancestor_crop(&self.memory, tile_id)
     }
 
     fn attribution(&self) -> Attribution {
@@ -252,6 +259,37 @@ fn save_bytes(conn: &Connection, tile_id: TileId, bytes: &[u8]) -> Result<(), Ti
 fn tile_within_world(tile_id: TileId) -> bool {
     let Some(max) = 1_u32.checked_shl(u32::from(tile_id.zoom)) else { return false };
     tile_id.x < max && tile_id.y < max
+}
+
+/// While the target tile is in flight, pull the closest cached
+/// ancestor out of the LRU and return it with a UV rect cropped to the
+/// quadrant that corresponds to the target. Walkers will stretch that
+/// crop over the target tile's screen slot — same "zoom blur" look
+/// Google/Yandex maps use while detail tiles are loading.
+fn ancestor_crop(
+    memory: &LruCache<TileId, Option<Texture>>,
+    tile_id: TileId,
+) -> Option<TextureWithUv> {
+    for k in 1..=tile_id.zoom {
+        let shift = u32::from(k);
+        let Some(grid) = 1_u32.checked_shl(shift) else { continue };
+        let ancestor = TileId {
+            x: tile_id.x >> shift,
+            y: tile_id.y >> shift,
+            zoom: tile_id.zoom.saturating_sub(k),
+        };
+        let Some(Some(texture)) = memory.peek(&ancestor) else { continue };
+        let mask = grid.saturating_sub(1);
+        let sub_x = (tile_id.x & mask) as f32;
+        let sub_y = (tile_id.y & mask) as f32;
+        let step = 1.0 / grid as f32;
+        let uv = egui::Rect::from_min_max(
+            egui::pos2(sub_x * step, sub_y * step),
+            egui::pos2(step.mul_add(1.0, sub_x * step), step.mul_add(1.0, sub_y * step)),
+        );
+        return Some(TextureWithUv { texture: texture.clone(), uv });
+    }
+    None
 }
 
 fn decode(bytes: &[u8]) -> Result<ColorImage, TileError> {
