@@ -84,7 +84,12 @@ impl Tiles for SqliteTiles {
             let _ = self.memory.put(id, Some(texture));
         }
 
-        if tile_id.zoom > OSM_MAX_ZOOM {
+        if tile_id.zoom > OSM_MAX_ZOOM || !tile_within_world(tile_id) {
+            // Walkers' flood-fill keeps expanding east/south past the
+            // world edge without wrapping, so x = 2^zoom (and similar)
+            // land here. Mark as permanently unavailable so we don't
+            // re-issue a doomed HTTP request next frame.
+            let _ = self.memory.put(tile_id, None);
             return None;
         }
 
@@ -241,6 +246,12 @@ fn save_bytes(conn: &Connection, tile_id: TileId, bytes: &[u8]) -> Result<(), Ti
         ],
     )?;
     Ok(())
+}
+
+/// Valid tile-id ranges per XYZ scheme: `0 <= x, y < 2^zoom`.
+fn tile_within_world(tile_id: TileId) -> bool {
+    let Some(max) = 1_u32.checked_shl(u32::from(tile_id.zoom)) else { return false };
+    tile_id.x < max && tile_id.y < max
 }
 
 fn decode(bytes: &[u8]) -> Result<ColorImage, TileError> {
