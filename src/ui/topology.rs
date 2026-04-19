@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use std::time::SystemTime;
 
 use eframe::egui;
+use walkers::Tiles as _;
 
 use crate::domain::ids::NodeId;
 use crate::domain::node::Node;
@@ -17,20 +18,25 @@ pub enum ViewKind {
 
 pub struct TopologyUi {
     pub view: ViewKind,
-    pub geo_pan: egui::Vec2,
-    pub geo_zoom: f32,
     pub signal_pan: egui::Vec2,
     pub signal_zoom: f32,
+    pub map_memory: walkers::MapMemory,
+    pub map_tiles: Option<walkers::HttpTiles>,
+    /// Set to `true` once we've centred the map on `my_node`'s GPS
+    /// position at least once — prevents repeatedly forcing the camera
+    /// back there as the user pans.
+    pub map_centered: bool,
 }
 
 impl Default for TopologyUi {
     fn default() -> Self {
         Self {
             view: ViewKind::Signal,
-            geo_pan: egui::Vec2::ZERO,
-            geo_zoom: 1.0,
             signal_pan: egui::Vec2::ZERO,
             signal_zoom: 1.0,
+            map_memory: walkers::MapMemory::default(),
+            map_tiles: None,
+            map_centered: false,
         }
     }
 }
@@ -69,17 +75,21 @@ fn toolbar(ui: &mut egui::Ui, state: &mut TopologyUi, snapshot: &DeviceSnapshot)
                     state.signal_zoom = 1.0;
                 }
                 ViewKind::Geographic => {
-                    state.geo_pan = egui::Vec2::ZERO;
-                    state.geo_zoom = 1.0;
+                    state.map_memory = walkers::MapMemory::default();
+                    state.map_centered = false;
                 }
             }
         }
-        let zoom = match state.view {
-            ViewKind::Signal => state.signal_zoom,
-            ViewKind::Geographic => state.geo_zoom,
-        };
-        ui.weak(format!("zoom {zoom:.1}×"));
-        ui.weak("· scroll to zoom · drag to pan");
+        match state.view {
+            ViewKind::Signal => {
+                ui.weak(format!("zoom {:.1}×", state.signal_zoom));
+                ui.weak("· scroll to zoom · drag to pan");
+            }
+            ViewKind::Geographic => {
+                ui.weak(format!("zoom z{:.0}", state.map_memory.zoom()));
+                ui.weak("· ctrl+scroll to zoom · drag to pan");
+            }
+        }
     });
 }
 
@@ -167,79 +177,165 @@ fn render_geographic_plane(
     state: &mut TopologyUi,
     detail_node: &mut Option<NodeId>,
 ) {
-    let available = ui.available_size();
-    let (response, painter) = ui.allocate_painter(available, egui::Sense::click_and_drag());
-    let rect = response.rect;
-    painter.rect_filled(rect, 0.0, ui.style().visuals.extreme_bg_color);
-
-    let gps_nodes: Vec<(NodeId, &Node)> = snapshot
-        .nodes
-        .iter()
-        .filter(|(_, n)| n.position.is_some())
-        .map(|(id, n)| (*id, n))
-        .collect();
-    if gps_nodes.is_empty() {
-        painter.text(
-            rect.center(),
-            egui::Align2::CENTER_CENTER,
-            "No nodes with GPS yet.\nA node must broadcast Position to appear here.",
-            egui::FontId::proportional(13.0),
-            ui.style().visuals.weak_text_color(),
-        );
-        return;
+    if state.map_tiles.is_none() {
+        state.map_tiles = Some(build_map_tiles(ui.ctx()));
     }
 
-    if response.dragged() {
-        let delta = response.drag_delta();
-        state.geo_pan = egui::vec2(state.geo_pan.x + delta.x, state.geo_pan.y + delta.y);
-    }
-    if response.hovered() {
-        let scroll = ui.input(|i| i.smooth_scroll_delta.y);
-        if scroll.abs() > f32::EPSILON {
-            let factor = (scroll * 0.005).exp();
-            state.geo_zoom = (state.geo_zoom * factor).clamp(0.25, 20.0);
-        }
+    let reference = reference_position(snapshot);
+    if !state.map_centered
+        && let Some(pos) = my_node_position(snapshot)
+    {
+        state.map_memory.center_at(pos);
+        let _ = state.map_memory.set_zoom(12.0);
+        state.map_centered = true;
     }
 
-    let bbox = compute_bbox(&gps_nodes);
-    let projector = Projector::new(&bbox, rect.shrink(24.0), state.geo_zoom, state.geo_pan);
-    let plane_origin = rect.center();
+    let available = ui.available_rect_before_wrap();
+    ui.painter()
+        .rect_filled(available, 0.0, ui.style().visuals.extreme_bg_color);
 
-    let mut placements: Vec<(NodeId, egui::Pos2)> = Vec::with_capacity(gps_nodes.len());
-    for (id, n) in &gps_nodes {
-        if let Some(p) = &n.position {
-            let pos = projector.project(p.latitude_deg, p.longitude_deg, plane_origin);
-            placements.push((*id, pos));
-        }
-    }
+    let overlay = NodesOverlay { snapshot, detail_node, reference };
+    let tiles = state.map_tiles.as_mut().map(|t| t as &mut dyn walkers::Tiles);
+    let map = walkers::Map::new(tiles, &mut state.map_memory, reference).with_plugin(overlay);
+    let response = ui.add(map);
 
-    let self_pos = snapshot
+    draw_attribution(ui, response.rect, state.map_tiles.as_ref());
+}
+
+fn build_map_tiles(ctx: &egui::Context) -> walkers::HttpTiles {
+    let cache = directories::ProjectDirs::from("dev", "", "mt")
+        .map(|dirs| dirs.cache_dir().join("map-tiles"));
+    let options = walkers::HttpOptions {
+        cache,
+        user_agent: Some(walkers::HeaderValue::from_static(concat!(
+            env!("CARGO_PKG_NAME"),
+            "/",
+            env!("CARGO_PKG_VERSION"),
+        ))),
+    };
+    walkers::HttpTiles::with_options(walkers::sources::OpenStreetMap, options, ctx.clone())
+}
+
+fn my_node_position(snapshot: &DeviceSnapshot) -> Option<walkers::Position> {
+    snapshot
         .nodes
         .get(&snapshot.my_node)
         .and_then(|n| n.position.as_ref())
-        .map(|p| projector.project(p.latitude_deg, p.longitude_deg, plane_origin));
+        .map(|p| walkers::Position::from_lat_lon(p.latitude_deg, p.longitude_deg))
+}
 
-    if let Some(origin) = self_pos {
-        for (id, pos) in &placements {
-            if *id == snapshot.my_node {
-                continue;
-            }
-            let hops = snapshot.nodes.get(id).and_then(|n| n.hops_away);
-            if hops != Some(0) {
-                continue;
-            }
-            let snr = snapshot.nodes.get(id).and_then(|n| n.snr_db);
-            painter.line_segment([origin, *pos], edge_stroke(snr));
+/// Pick a sane reference point for scale-bar math and Map's `my_position`:
+/// `my_node`'s GPS if we have it, else the centroid of GPS-bearing nodes,
+/// else (0, 0).
+fn reference_position(snapshot: &DeviceSnapshot) -> walkers::Position {
+    if let Some(pos) = my_node_position(snapshot) {
+        return pos;
+    }
+    let mut lat_sum = 0.0_f64;
+    let mut lon_sum = 0.0_f64;
+    let mut count = 0_u32;
+    for n in snapshot.nodes.values() {
+        if let Some(p) = &n.position {
+            lat_sum += p.latitude_deg;
+            lon_sum += p.longitude_deg;
+            count = count.saturating_add(1);
         }
     }
-
-    for (id, pos) in &placements {
-        let is_self = *id == snapshot.my_node;
-        draw_node(&painter, *pos, *id, snapshot, is_self, ui.style());
+    if count == 0 {
+        walkers::Position::from_lat_lon(0.0, 0.0)
+    } else {
+        let denom = f64::from(count);
+        walkers::Position::from_lat_lon(lat_sum / denom, lon_sum / denom)
     }
+}
 
-    draw_scale_bar(&painter, rect, projector.scale_m_per_px(), ui.style());
-    handle_interaction(ui, &response, &placements, snapshot, detail_node);
+fn draw_attribution(
+    ui: &egui::Ui,
+    rect: egui::Rect,
+    tiles: Option<&walkers::HttpTiles>,
+) {
+    let Some(tiles) = tiles else { return };
+    let attribution = tiles.attribution();
+    let text = format!("© {}", attribution.text);
+    let galley = ui.painter().layout_no_wrap(
+        text,
+        egui::FontId::proportional(10.0),
+        ui.style().visuals.text_color(),
+    );
+    let pad_x = 6.0_f32;
+    let pad_y = 3.0_f32;
+    let gs = galley.size();
+    let size = egui::vec2(pad_x.mul_add(2.0, gs.x), pad_y.mul_add(2.0, gs.y));
+    let top_left = egui::pos2(rect.right() - size.x - 6.0, rect.bottom() - size.y - 6.0);
+    let bg_rect = egui::Rect::from_min_size(top_left, size);
+    ui.painter().rect_filled(
+        bg_rect,
+        3.0,
+        ui.style().visuals.extreme_bg_color.gamma_multiply(0.85),
+    );
+    let text_origin = egui::pos2(top_left.x + pad_x, top_left.y + pad_y);
+    ui.painter().galley(text_origin, galley, egui::Color32::WHITE);
+}
+
+struct NodesOverlay<'a> {
+    snapshot: &'a DeviceSnapshot,
+    detail_node: &'a mut Option<NodeId>,
+    reference: walkers::Position,
+}
+
+impl walkers::Plugin for NodesOverlay<'_> {
+    fn run(
+        self: Box<Self>,
+        ui: &mut egui::Ui,
+        response: &egui::Response,
+        projector: &walkers::Projector,
+    ) {
+        let Self { snapshot, detail_node, reference } = *self;
+        let mut placements: Vec<(NodeId, egui::Pos2)> = Vec::new();
+        for (id, n) in &snapshot.nodes {
+            let Some(p) = &n.position else { continue };
+            let vec = projector
+                .project(walkers::Position::from_lat_lon(p.latitude_deg, p.longitude_deg));
+            placements.push((*id, vec.to_pos2()));
+        }
+
+        let self_pos = placements
+            .iter()
+            .find(|(id, _)| *id == snapshot.my_node)
+            .map(|(_, pos)| *pos);
+        let painter = ui.painter().clone();
+
+        if let Some(origin) = self_pos {
+            for (id, pos) in &placements {
+                if *id == snapshot.my_node {
+                    continue;
+                }
+                let hops = snapshot.nodes.get(id).and_then(|n| n.hops_away);
+                if hops != Some(0) {
+                    continue;
+                }
+                let snr = snapshot.nodes.get(id).and_then(|n| n.snr_db);
+                painter.line_segment([origin, *pos], edge_stroke(snr));
+            }
+        }
+
+        for (id, pos) in &placements {
+            let is_self = *id == snapshot.my_node;
+            draw_node(&painter, *pos, *id, snapshot, is_self, ui.style());
+        }
+
+        let scale_px_per_m = projector.scale_pixel_per_meter(reference);
+        if scale_px_per_m > 0.0 && scale_px_per_m.is_finite() {
+            draw_scale_bar(
+                &painter,
+                response.rect,
+                f64::from(1.0 / scale_px_per_m),
+                ui.style(),
+            );
+        }
+
+        handle_interaction(ui, response, &placements, snapshot, detail_node);
+    }
 }
 
 fn render_no_gps(
@@ -377,82 +473,6 @@ fn collect_hit_points(
         out.push((p.id, p.pos));
     }
     out
-}
-
-struct Bbox {
-    lat_min: f64,
-    lat_max: f64,
-    lon_min: f64,
-    lon_max: f64,
-}
-
-fn compute_bbox(gps_nodes: &[(NodeId, &Node)]) -> Bbox {
-    let mut lat_min = f64::INFINITY;
-    let mut lat_max = f64::NEG_INFINITY;
-    let mut lon_min = f64::INFINITY;
-    let mut lon_max = f64::NEG_INFINITY;
-    for (_, n) in gps_nodes {
-        if let Some(p) = &n.position {
-            lat_min = lat_min.min(p.latitude_deg);
-            lat_max = lat_max.max(p.latitude_deg);
-            lon_min = lon_min.min(p.longitude_deg);
-            lon_max = lon_max.max(p.longitude_deg);
-        }
-    }
-    if (lat_max - lat_min).abs() < 1e-5 {
-        lat_min -= 5e-4;
-        lat_max += 5e-4;
-    }
-    if (lon_max - lon_min).abs() < 1e-5 {
-        lon_min -= 5e-4;
-        lon_max += 5e-4;
-    }
-    Bbox { lat_min, lat_max, lon_min, lon_max }
-}
-
-struct Projector {
-    lat_center: f64,
-    lon_center: f64,
-    meters_per_deg_lat: f64,
-    meters_per_deg_lon: f64,
-    scale: f64,
-    pan: egui::Vec2,
-}
-
-impl Projector {
-    fn new(bbox: &Bbox, plot: egui::Rect, zoom: f32, pan: egui::Vec2) -> Self {
-        let lat_center = (bbox.lat_min + bbox.lat_max) * 0.5;
-        let lon_center = (bbox.lon_min + bbox.lon_max) * 0.5;
-        let meters_per_deg_lat = 111_320.0_f64;
-        let cos_lat = lat_center.to_radians().cos().abs().max(0.01);
-        let meters_per_deg_lon = 111_320.0_f64 * cos_lat;
-        let world_width_m = (bbox.lon_max - bbox.lon_min) * meters_per_deg_lon;
-        let world_height_m = (bbox.lat_max - bbox.lat_min) * meters_per_deg_lat;
-        let fit_horizontal = f64::from(plot.width()) / world_width_m.max(1.0);
-        let fit_vertical = f64::from(plot.height()) / world_height_m.max(1.0);
-        let fit = fit_horizontal.min(fit_vertical).max(1e-9);
-        Self {
-            lat_center,
-            lon_center,
-            meters_per_deg_lat,
-            meters_per_deg_lon,
-            scale: fit * f64::from(zoom),
-            pan,
-        }
-    }
-
-    fn project(&self, lat_deg: f64, lon_deg: f64, origin: egui::Pos2) -> egui::Pos2 {
-        let east_m = (lon_deg - self.lon_center) * self.meters_per_deg_lon;
-        let south_m = (self.lat_center - lat_deg) * self.meters_per_deg_lat;
-        egui::pos2(
-            origin.x + (east_m * self.scale) as f32 + self.pan.x,
-            origin.y + (south_m * self.scale) as f32 + self.pan.y,
-        )
-    }
-
-    fn scale_m_per_px(&self) -> f64 {
-        if self.scale > 0.0 { 1.0 / self.scale } else { 0.0 }
-    }
 }
 
 fn draw_scale_bar(painter: &egui::Painter, rect: egui::Rect, m_per_px: f64, style: &egui::Style) {
