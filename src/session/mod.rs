@@ -26,7 +26,7 @@ use crate::session::commands::Command;
 use crate::session::handshake::{fragments_from_radio, node_from_proto};
 use crate::transport::BoxedTransport;
 
-pub const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(300);
+pub const HEARTBEAT_INTERVAL: Duration = Duration::from_mins(5);
 pub const ACK_TIMEOUT: Duration = Duration::from_secs(30);
 pub const MY_INFO_TIMEOUT: Duration = Duration::from_secs(15);
 /// Kill the session if no frame arrives for this long.
@@ -34,7 +34,7 @@ pub const MY_INFO_TIMEOUT: Duration = Duration::from_secs(15);
 /// The radio emits position / telemetry / node-info far more often than this on
 /// any live link, so the watchdog only trips after a real disconnect — e.g.
 /// laptop suspend/resume leaving a stale BLE handle that silently drops writes.
-pub const RX_WATCHDOG: Duration = Duration::from_secs(420);
+pub const RX_WATCHDOG: Duration = Duration::from_mins(7);
 /// Cap on how long a single heartbeat write may block.
 ///
 /// Protects against OS-level buffering where the underlying socket is dead but
@@ -84,15 +84,23 @@ pub enum Event {
     },
     StatsUpdated(MeshStats),
     TracerouteResult(crate::domain::traceroute::TracerouteResult),
-    TracerouteFailed { target: NodeId, reason: String },
+    TracerouteFailed {
+        target: NodeId,
+        reason: String,
+    },
     MessageReceived(TextMessage),
-    MessageStateChanged { id: PacketId, state: DeliveryState },
+    MessageStateChanged {
+        id: PacketId,
+        state: DeliveryState,
+    },
     Disconnected,
     Error(String),
 }
 
 pub type Connector = Box<
-    dyn Fn(ConnectionProfile) -> BoxFuture<'static, Result<(BoxedTransport, TransportKind), ConnectError>>
+    dyn Fn(
+            ConnectionProfile,
+        ) -> BoxFuture<'static, Result<(BoxedTransport, TransportKind), ConnectError>>
         + Send
         + Sync,
 >;
@@ -106,11 +114,7 @@ impl DeviceSession {
         Self { connect }
     }
 
-    pub async fn run(
-        self,
-        mut rx: mpsc::UnboundedReceiver<Command>,
-        tx: mpsc::Sender<Event>,
-    ) {
+    pub async fn run(self, mut rx: mpsc::UnboundedReceiver<Command>, tx: mpsc::Sender<Event>) {
         while let Some(cmd) = rx.recv().await {
             match cmd {
                 Command::Connect(profile) => {
@@ -235,8 +239,9 @@ async fn open_with_cancel(
 }
 
 async fn wait_for_my_info(
-    stream: &mut (impl futures::Stream<Item = Result<Vec<u8>, crate::transport::TransportError>>
-              + Unpin),
+    stream: &mut (
+             impl futures::Stream<Item = Result<Vec<u8>, crate::transport::TransportError>> + Unpin
+         ),
     rx: &mut mpsc::UnboundedReceiver<Command>,
     tx: &mpsc::Sender<Event>,
 ) -> Option<NodeId> {
@@ -319,10 +324,12 @@ impl InitAcc {
             HandshakeFragment::Node(node) => {
                 let _ = self.nodes.insert(node.id, node);
             }
-            HandshakeFragment::Channel(ch) => match self.channels.iter_mut().find(|c| c.index == ch.index) {
-                Some(slot) => *slot = ch,
-                None => self.channels.push(ch),
-            },
+            HandshakeFragment::Channel(ch) => {
+                match self.channels.iter_mut().find(|c| c.index == ch.index) {
+                    Some(slot) => *slot = ch,
+                    None => self.channels.push(ch),
+                }
+            }
             HandshakeFragment::Lora(settings) => self.lora = Some(settings),
             HandshakeFragment::Device(settings) => self.device = Some(settings),
             HandshakeFragment::Position(settings) => self.position = Some(settings),
@@ -381,8 +388,9 @@ impl InitAcc {
 
 async fn run_ready_loop(
     sink: SinkRef<'_, impl FrameSink + ?Sized>,
-    stream: &mut (impl futures::Stream<Item = Result<Vec<u8>, crate::transport::TransportError>>
-              + Unpin),
+    stream: &mut (
+             impl futures::Stream<Item = Result<Vec<u8>, crate::transport::TransportError>> + Unpin
+         ),
     my_node: NodeId,
     rx: &mut mpsc::UnboundedReceiver<Command>,
     tx: &mpsc::Sender<Event>,
@@ -426,10 +434,7 @@ async fn run_ready_loop(
     }
 }
 
-async fn heartbeat_step(
-    sink: SinkRef<'_, impl FrameSink + ?Sized>,
-    my_node: NodeId,
-) -> LoopStep {
+async fn heartbeat_step(sink: SinkRef<'_, impl FrameSink + ?Sized>, my_node: NodeId) -> LoopStep {
     let work = async move {
         send_heartbeat(&mut *sink).await?;
         send_metadata_probe(&mut *sink, my_node).await?;
@@ -501,9 +506,7 @@ async fn handle_command(
             }
             LoopStep::Continue
         }
-        Command::Traceroute { node } => {
-            handle_traceroute(sink, my_node, tx, pending, node).await
-        }
+        Command::Traceroute { node } => handle_traceroute(sink, my_node, tx, pending, node).await,
         other => handle_config_command(other, my_node, sink).await,
     }
 }
@@ -831,15 +834,13 @@ async fn send_remove_fixed_position(
     my_node: NodeId,
 ) -> Result<(), ConnectError> {
     let admin = meshtastic::AdminMessage {
-        payload_variant: Some(meshtastic::admin_message::PayloadVariant::RemoveFixedPosition(
-            true,
-        )),
+        payload_variant: Some(meshtastic::admin_message::PayloadVariant::RemoveFixedPosition(true)),
         ..Default::default()
     };
     send_admin(sink, my_node, admin).await
 }
 
-const TRACEROUTE_TIMEOUT: Duration = Duration::from_secs(60);
+const TRACEROUTE_TIMEOUT: Duration = Duration::from_mins(1);
 
 async fn handle_traceroute(
     sink: SinkRef<'_, impl FrameSink + ?Sized>,
@@ -930,10 +931,7 @@ async fn send_favorite(
     } else {
         PayloadVariant::RemoveFavoriteNode(node.0)
     };
-    let admin = meshtastic::AdminMessage {
-        payload_variant: Some(variant),
-        ..Default::default()
-    };
+    let admin = meshtastic::AdminMessage { payload_variant: Some(variant), ..Default::default() };
     send_admin(sink, my_node, admin).await
 }
 
@@ -959,12 +957,7 @@ async fn send_set_mqtt(
             should_report_location: s.map.publish_location,
         }),
     };
-    send_module_config(
-        sink,
-        my_node,
-        meshtastic::module_config::PayloadVariant::Mqtt(mqtt),
-    )
-    .await
+    send_module_config(sink, my_node, meshtastic::module_config::PayloadVariant::Mqtt(mqtt)).await
 }
 
 async fn send_set_telemetry_cfg(
@@ -989,12 +982,7 @@ async fn send_set_telemetry_cfg(
         health_measurement_enabled: s.health.measurement_enabled,
         health_screen_enabled: s.health.screen_enabled,
     };
-    send_module_config(
-        sink,
-        my_node,
-        meshtastic::module_config::PayloadVariant::Telemetry(t),
-    )
-    .await
+    send_module_config(sink, my_node, meshtastic::module_config::PayloadVariant::Telemetry(t)).await
 }
 
 async fn send_set_neighbor_info(
@@ -1007,12 +995,8 @@ async fn send_set_neighbor_info(
         update_interval: s.update_interval_secs,
         transmit_over_lora: s.transmit_over_lora,
     };
-    send_module_config(
-        sink,
-        my_node,
-        meshtastic::module_config::PayloadVariant::NeighborInfo(ni),
-    )
-    .await
+    send_module_config(sink, my_node, meshtastic::module_config::PayloadVariant::NeighborInfo(ni))
+        .await
 }
 
 async fn send_set_ext_notif(
@@ -1062,12 +1046,8 @@ async fn send_set_canned(
         inputbroker_event_press: 0,
         ..Default::default()
     };
-    send_module_config(
-        sink,
-        my_node,
-        meshtastic::module_config::PayloadVariant::CannedMessage(c),
-    )
-    .await
+    send_module_config(sink, my_node, meshtastic::module_config::PayloadVariant::CannedMessage(c))
+        .await
 }
 
 async fn send_set_range_test(
@@ -1081,12 +1061,7 @@ async fn send_set_range_test(
         save: s.save,
         clear_on_reboot: s.clear_on_reboot,
     };
-    send_module_config(
-        sink,
-        my_node,
-        meshtastic::module_config::PayloadVariant::RangeTest(r),
-    )
-    .await
+    send_module_config(sink, my_node, meshtastic::module_config::PayloadVariant::RangeTest(r)).await
 }
 
 async fn send_set_store_forward(
@@ -1102,12 +1077,8 @@ async fn send_set_store_forward(
         history_return_window: s.history_return_window_secs,
         is_server: s.is_server,
     };
-    send_module_config(
-        sink,
-        my_node,
-        meshtastic::module_config::PayloadVariant::StoreForward(sf),
-    )
-    .await
+    send_module_config(sink, my_node, meshtastic::module_config::PayloadVariant::StoreForward(sf))
+        .await
 }
 
 async fn send_module_config(
@@ -1169,10 +1140,7 @@ async fn send_ignored(
     } else {
         PayloadVariant::RemoveIgnoredNode(node.0)
     };
-    let admin = meshtastic::AdminMessage {
-        payload_variant: Some(variant),
-        ..Default::default()
-    };
+    let admin = meshtastic::AdminMessage { payload_variant: Some(variant), ..Default::default() };
     send_admin(sink, my_node, admin).await
 }
 
@@ -1184,6 +1152,7 @@ async fn send_admin_action(
 ) -> Result<(), ConnectError> {
     use crate::session::commands::AdminAction;
     use meshtastic::admin_message::PayloadVariant;
+    #[allow(deprecated)]
     let variant = match action {
         AdminAction::Reboot { seconds } => PayloadVariant::RebootSeconds(seconds),
         AdminAction::Shutdown { seconds } => PayloadVariant::ShutdownSeconds(seconds),
@@ -1192,10 +1161,7 @@ async fn send_admin_action(
         AdminAction::FactoryResetConfig => PayloadVariant::FactoryResetConfig(1),
         AdminAction::NodedbReset => PayloadVariant::NodedbReset(true),
     };
-    let admin = meshtastic::AdminMessage {
-        payload_variant: Some(variant),
-        ..Default::default()
-    };
+    let admin = meshtastic::AdminMessage { payload_variant: Some(variant), ..Default::default() };
     send_admin_to(sink, my_node, target, admin).await
 }
 
@@ -1378,9 +1344,7 @@ async fn send_text(
     Ok(id)
 }
 
-async fn send_heartbeat(
-    sink: SinkRef<'_, impl FrameSink + ?Sized>,
-) -> Result<(), ConnectError> {
+async fn send_heartbeat(sink: SinkRef<'_, impl FrameSink + ?Sized>) -> Result<(), ConnectError> {
     let msg = meshtastic::ToRadio {
         payload_variant: Some(meshtastic::to_radio::PayloadVariant::Heartbeat(
             meshtastic::Heartbeat { nonce: 0 },
@@ -1392,10 +1356,7 @@ async fn send_heartbeat(
     Ok(())
 }
 
-fn spawn_ack_timeout(
-    tx: mpsc::Sender<Event>,
-    id: PacketId,
-) -> tokio::sync::oneshot::Sender<()> {
+fn spawn_ack_timeout(tx: mpsc::Sender<Event>, id: PacketId) -> tokio::sync::oneshot::Sender<()> {
     let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel();
     tokio::spawn(async move {
         tokio::select! {
@@ -1432,18 +1393,15 @@ fn inspector_frame_event(msg: &meshtastic::FromRadio, frame_size: usize) -> Even
         Some(meshtastic::from_radio::PayloadVariant::QueueStatus(_)) => "QueueStatus",
         Some(meshtastic::from_radio::PayloadVariant::XmodemPacket(_)) => "XmodemPacket",
         Some(meshtastic::from_radio::PayloadVariant::Metadata(_)) => "Metadata",
-        Some(meshtastic::from_radio::PayloadVariant::MqttClientProxyMessage(_)) => "MqttClientProxyMessage",
+        Some(meshtastic::from_radio::PayloadVariant::MqttClientProxyMessage(_)) => {
+            "MqttClientProxyMessage"
+        }
         Some(meshtastic::from_radio::PayloadVariant::FileInfo(_)) => "FileInfo",
         Some(meshtastic::from_radio::PayloadVariant::ClientNotification(_)) => "ClientNotification",
         Some(meshtastic::from_radio::PayloadVariant::DeviceuiConfig(_)) => "DeviceuiConfig",
         None => "Empty",
     };
-    Event::InspectorFrame {
-        at: SystemTime::now(),
-        frame_size,
-        variant,
-        debug: format!("{msg:#?}"),
-    }
+    Event::InspectorFrame { at: SystemTime::now(), frame_size, variant, debug: format!("{msg:#?}") }
 }
 
 fn incoming_outcomes(msg: meshtastic::FromRadio, my_node: NodeId) -> Vec<IncomingOutcome> {
@@ -1452,10 +1410,9 @@ fn incoming_outcomes(msg: meshtastic::FromRadio, my_node: NodeId) -> Vec<Incomin
     match variant {
         PayloadVariant::Packet(packet) => packet_outcomes(packet, my_node),
         PayloadVariant::NodeInfo(ni) => node_info_outcomes(&ni, my_node),
-        PayloadVariant::Channel(ch) => channel_to_events(ch)
-            .into_iter()
-            .map(IncomingOutcome::Event)
-            .collect(),
+        PayloadVariant::Channel(ch) => {
+            channel_to_events(ch).into_iter().map(IncomingOutcome::Event).collect()
+        }
         PayloadVariant::Config(cfg) => config_to_events(cfg),
         PayloadVariant::ModuleConfig(cfg) => module_config_to_events(cfg),
         PayloadVariant::QueueStatus(qs) if qs.res == 0 => {
@@ -1488,11 +1445,11 @@ fn incoming_outcomes(msg: meshtastic::FromRadio, my_node: NodeId) -> Vec<Incomin
 }
 
 fn config_to_events(cfg: meshtastic::Config) -> Vec<IncomingOutcome> {
-    use meshtastic::config::PayloadVariant;
     use crate::session::handshake::{
         bluetooth_from_proto, device_from_proto, display_from_proto, lora_from_proto,
         network_from_proto, position_from_proto, power_from_proto, security_from_proto,
     };
+    use meshtastic::config::PayloadVariant;
     let Some(variant) = cfg.payload_variant else { return Vec::new() };
     match variant {
         PayloadVariant::Lora(lora) => {
@@ -1524,11 +1481,11 @@ fn config_to_events(cfg: meshtastic::Config) -> Vec<IncomingOutcome> {
 }
 
 fn module_config_to_events(cfg: meshtastic::ModuleConfig) -> Vec<IncomingOutcome> {
-    use meshtastic::module_config::PayloadVariant;
     use crate::session::handshake::{
         canned_from_proto, ext_notif_from_proto, mqtt_from_proto, neighbor_info_from_proto,
         range_test_from_proto, store_forward_from_proto, telemetry_from_proto,
     };
+    use meshtastic::module_config::PayloadVariant;
     let Some(variant) = cfg.payload_variant else { return Vec::new() };
     match variant {
         PayloadVariant::Mqtt(m) => {
@@ -1589,20 +1546,22 @@ fn packet_outcomes(p: meshtastic::MeshPacket, my_node: NodeId) -> Vec<IncomingOu
                 Vec::new()
             }
         }
-        PortPayload::Text(text) => vec![IncomingOutcome::Event(Event::MessageReceived(TextMessage {
-            id: PacketId(p.id),
-            channel,
-            from: NodeId(p.from),
-            to: if p.to == BROADCAST_NODE.0 {
-                Recipient::Broadcast
-            } else {
-                Recipient::Node(NodeId(p.to))
-            },
-            text,
-            received_at: SystemTime::now(),
-            direction: Direction::Incoming,
-            state: DeliveryState::Acked,
-        }))],
+        PortPayload::Text(text) => {
+            vec![IncomingOutcome::Event(Event::MessageReceived(TextMessage {
+                id: PacketId(p.id),
+                channel,
+                from: NodeId(p.from),
+                to: if p.to == BROADCAST_NODE.0 {
+                    Recipient::Broadcast
+                } else {
+                    Recipient::Node(NodeId(p.to))
+                },
+                text,
+                received_at: SystemTime::now(),
+                direction: Direction::Incoming,
+                state: DeliveryState::Acked,
+            }))]
+        }
         PortPayload::Routing(r) => routing_to_outcomes(PacketId(request_id), NodeId(p.from), r),
         PortPayload::Traceroute(rd) => vec![IncomingOutcome::RouteReply {
             request_id: PacketId(request_id),
@@ -1706,4 +1665,3 @@ fn channel_to_events(ch: meshtastic::Channel) -> Vec<Event> {
         })
         .collect()
 }
-

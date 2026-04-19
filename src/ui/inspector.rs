@@ -35,7 +35,13 @@ pub struct Entry {
 }
 
 impl InspectorUi {
-    pub fn push(&mut self, at: SystemTime, frame_size: usize, variant: &'static str, debug: String) {
+    pub fn push(
+        &mut self,
+        at: SystemTime,
+        frame_size: usize,
+        variant: &'static str,
+        debug: String,
+    ) {
         if self.paused {
             return;
         }
@@ -179,9 +185,7 @@ fn render_detail(ui: &mut egui::Ui, state: &InspectorUi) {
     ui.label(format!("{} bytes · {}", entry.frame_size, format_time_full(entry.at)));
     ui.separator();
     egui::ScrollArea::both().auto_shrink([false; 2]).show(ui, |ui| {
-        ui.add(
-            egui::Label::new(egui::RichText::new(&entry.debug).monospace()).selectable(true),
-        );
+        ui.add(egui::Label::new(egui::RichText::new(&entry.debug).monospace()).selectable(true));
     });
 }
 
@@ -227,7 +231,8 @@ fn export_json(state: &InspectorUi) -> String {
         }
         first = false;
         let at = format_time_full(entry.at);
-        let debug_escaped = entry.debug.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', "\\n");
+        let debug_escaped =
+            entry.debug.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', "\\n");
         let _ = write!(
             out,
             "  {{\"at\":\"{at}\",\"variant\":\"{v}\",\"bytes\":{b},\"debug\":\"{d}\"}}",

@@ -13,10 +13,7 @@ pub use error::TransportError;
 pub type Frame = Vec<u8>;
 
 pub trait Transport:
-    Sink<Frame, Error = TransportError>
-    + Stream<Item = Result<Frame, TransportError>>
-    + Send
-    + 'static
+    Sink<Frame, Error = TransportError> + Stream<Item = Result<Frame, TransportError>> + Send + 'static
 {
 }
 

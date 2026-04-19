@@ -27,12 +27,7 @@ pub struct DiscoveredRow {
 
 impl From<Discovered> for DiscoveredRow {
     fn from(d: Discovered) -> Self {
-        Self {
-            name: d.name,
-            address: d.address,
-            rssi_dbm: d.rssi_dbm,
-            is_connected: d.is_paired,
-        }
+        Self { name: d.name, address: d.address, rssi_dbm: d.rssi_dbm, is_connected: d.is_paired }
     }
 }
 

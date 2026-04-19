@@ -19,14 +19,9 @@ pub fn render(
     cmd: &mpsc::UnboundedSender<Command>,
 ) {
     let Some(target) = ui_state.target else { return };
-    let target_name = snapshot
-        .nodes
-        .get(&target)
-        .map_or_else(|| format!("!{:08x}", target.0), display_name);
-    let target_pubkey_empty = snapshot
-        .nodes
-        .get(&target)
-        .is_some_and(|n| n.public_key.is_empty());
+    let target_name =
+        snapshot.nodes.get(&target).map_or_else(|| format!("!{:08x}", target.0), display_name);
+    let target_pubkey_empty = snapshot.nodes.get(&target).is_some_and(|n| n.public_key.is_empty());
 
     let mut close = false;
     let mut picked: Option<AdminAction> = None;

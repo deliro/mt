@@ -121,9 +121,9 @@ impl App {
         ev_rx: mpsc::Receiver<Event>,
         store: Option<HistoryStore>,
     ) -> Self {
-        let pre_armed = last_active_key.as_ref().and_then(|key| {
-            profiles.iter().find(|p| &p.key() == key).cloned()
-        });
+        let pre_armed = last_active_key
+            .as_ref()
+            .and_then(|key| profiles.iter().find(|p| &p.key() == key).cloned());
         let effective_key = match (last_active_key.as_deref(), pre_armed.as_ref()) {
             (Some(key), Some(profile)) => {
                 tracing::info!(%key, name = profile.name(), "auto-reconnect armed from last_active");
@@ -155,13 +155,7 @@ impl App {
         }
         let nodes_ui = nodes::NodesUi { sort: nodes_sort, ..nodes::NodesUi::default() };
         Self {
-            state: AppState {
-                profiles,
-                nodes_ui,
-                alerts,
-                reconnect,
-                ..AppState::default()
-            },
+            state: AppState { profiles, nodes_ui, alerts, reconnect, ..AppState::default() },
             cmd_tx,
             ev_rx,
             store,
@@ -290,9 +284,7 @@ impl App {
             return;
         }
         let Some(store) = self.store.as_ref() else {
-            tracing::warn!(
-                "no history store open — last_active will not survive restart"
-            );
+            tracing::warn!("no history store open — last_active will not survive restart");
             self.state.reconnect.last_persisted_key = key;
             return;
         };
@@ -300,10 +292,7 @@ impl App {
             warn!(%e, "persist last-active profile failed");
             return;
         }
-        tracing::info!(
-            key = key.as_deref().unwrap_or("<none>"),
-            "persisted last_active profile"
-        );
+        tracing::info!(key = key.as_deref().unwrap_or("<none>"), "persisted last_active profile");
         self.state.reconnect.last_persisted_key = key;
     }
 
@@ -350,7 +339,9 @@ impl App {
             .nodes
             .get(&from)
             .map_or_else(|| format!("!{:08x}", from.0), node_display_name);
-        for event in alerts::on_message(&self.state.alerts, self.state.snapshot.my_node, &m, &sender) {
+        for event in
+            alerts::on_message(&self.state.alerts, self.state.snapshot.my_node, &m, &sender)
+        {
             alerts::fire(&event);
         }
         self.state.snapshot.upsert_message(m);
@@ -425,13 +416,8 @@ impl App {
         id: crate::domain::ids::PacketId,
         state: &crate::domain::message::DeliveryState,
     ) {
-        let applied = self
-            .state
-            .snapshot
-            .messages
-            .iter_mut()
-            .find(|m| m.id == id)
-            .is_some_and(|m| {
+        let applied =
+            self.state.snapshot.messages.iter_mut().find(|m| m.id == id).is_some_and(|m| {
                 if m.state.is_terminal() {
                     false
                 } else {
@@ -544,12 +530,7 @@ impl eframe::App for App {
         self.render_sidebar(ctx);
         self.render_active_tab(ctx);
         details::render_overlay(ctx, &mut self.state, &self.cmd_tx);
-        remote_admin::render(
-            ctx,
-            &self.state.snapshot,
-            &mut self.state.remote_admin,
-            &self.cmd_tx,
-        );
+        remote_admin::render(ctx, &self.state.snapshot, &mut self.state.remote_admin, &self.cmd_tx);
         ctx.request_repaint_after(std::time::Duration::from_millis(100));
     }
 }
@@ -667,13 +648,8 @@ impl App {
             }
             Tab::Nodes => {
                 egui::CentralPanel::default().show(ctx, |ui| {
-                    let AppState {
-                        snapshot,
-                        nodes_ui,
-                        detail_node,
-                        focus_search,
-                        ..
-                    } = &mut self.state;
+                    let AppState { snapshot, nodes_ui, detail_node, focus_search, .. } =
+                        &mut self.state;
                     nodes::render(ui, snapshot, nodes_ui, detail_node, focus_search);
                 });
             }
@@ -686,13 +662,8 @@ impl App {
             Tab::Settings => {
                 self.refresh_storage_counts();
                 egui::CentralPanel::default().show(ctx, |ui| {
-                    let AppState {
-                        snapshot,
-                        settings_ui,
-                        alerts,
-                        alerts_dirty,
-                        ..
-                    } = &mut self.state;
+                    let AppState { snapshot, settings_ui, alerts, alerts_dirty, .. } =
+                        &mut self.state;
                     settings::render(
                         ui,
                         snapshot,
@@ -718,12 +689,7 @@ impl App {
             Tab::Topology => {
                 let tile_db_path = self.store.as_ref().map(|s| s.path().to_path_buf());
                 egui::CentralPanel::default().show(ctx, |ui| {
-                    let AppState {
-                        snapshot,
-                        topology_ui,
-                        detail_node,
-                        ..
-                    } = &mut self.state;
+                    let AppState { snapshot, topology_ui, detail_node, .. } = &mut self.state;
                     topology::render(ui, snapshot, topology_ui, detail_node, tile_db_path);
                 });
             }

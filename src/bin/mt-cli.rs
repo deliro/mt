@@ -59,10 +59,7 @@ fn arg_or_usage<F: FnOnce(&str) -> ExitCode>(arg: Option<&String>, run: F) -> Ex
 }
 
 fn duration_from_env(var: &str, default: Duration) -> Duration {
-    env::var(var)
-        .ok()
-        .and_then(|v| v.parse::<u64>().ok())
-        .map_or(default, Duration::from_secs)
+    env::var(var).ok().and_then(|v| v.parse::<u64>().ok()).map_or(default, Duration::from_secs)
 }
 
 fn print_usage() {
@@ -75,9 +72,8 @@ async fn cmd_scan() -> ExitCode {
     let (tx, mut rx) = mpsc::unbounded_channel::<ble::Discovered>();
     let scanner = tokio::spawn(ble::scan_stream(Duration::from_secs(6), tx));
     let overall = duration_from_env("MT_TIMEOUT_SECS", Duration::from_secs(10));
-    let deadline = tokio::time::Instant::now()
-        .checked_add(overall)
-        .unwrap_or_else(tokio::time::Instant::now);
+    let deadline =
+        tokio::time::Instant::now().checked_add(overall).unwrap_or_else(tokio::time::Instant::now);
     let mut found = 0usize;
     loop {
         let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
@@ -143,9 +139,8 @@ async fn drive_connect(
     overall: Duration,
     stream_window: Duration,
 ) -> ExitCode {
-    let ready_deadline = tokio::time::Instant::now()
-        .checked_add(overall)
-        .unwrap_or_else(tokio::time::Instant::now);
+    let ready_deadline =
+        tokio::time::Instant::now().checked_add(overall).unwrap_or_else(tokio::time::Instant::now);
     let connected_snapshot: Option<Box<mt::domain::snapshot::DeviceSnapshot>>;
     loop {
         let remaining = ready_deadline.saturating_duration_since(tokio::time::Instant::now());
@@ -188,11 +183,9 @@ async fn drive_connect(
     let post_deadline = tokio::time::Instant::now()
         .checked_add(stream_window)
         .unwrap_or_else(tokio::time::Instant::now);
-    while let Ok(Some(ev)) = timeout(
-        post_deadline.saturating_duration_since(tokio::time::Instant::now()),
-        rx.recv(),
-    )
-    .await
+    while let Ok(Some(ev)) =
+        timeout(post_deadline.saturating_duration_since(tokio::time::Instant::now()), rx.recv())
+            .await
     {
         match ev {
             Event::NodeUpdated(_) => {
@@ -250,11 +243,9 @@ async fn pump_body(
         .checked_add(stream_window)
         .unwrap_or_else(tokio::time::Instant::now);
     let mut count: usize = 0;
-    while let Ok(Some(item)) = timeout(
-        deadline.saturating_duration_since(tokio::time::Instant::now()),
-        stream.next(),
-    )
-    .await
+    while let Ok(Some(item)) =
+        timeout(deadline.saturating_duration_since(tokio::time::Instant::now()), stream.next())
+            .await
     {
         let frame = item.map_err(|e| mt::error::ConnectError::BleGatt(e.to_string()))?;
         count = count.saturating_add(1);

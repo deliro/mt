@@ -140,7 +140,10 @@ fn profiles_and_last_active_survive_reopen() {
     let path = dir.path().join("history.db");
 
     let profiles = vec![
-        ConnectionProfile::Ble { name: "pack".into(), address: BleAddress::new("AA:BB:CC:DD:EE:FF") },
+        ConnectionProfile::Ble {
+            name: "pack".into(),
+            address: BleAddress::new("AA:BB:CC:DD:EE:FF"),
+        },
         ConnectionProfile::Tcp { name: "bridge".into(), host: "10.0.0.5".into(), port: 4403 },
     ];
 

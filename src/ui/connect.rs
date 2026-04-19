@@ -139,12 +139,11 @@ fn add_dialog(ctx: &egui::Context, state: &mut AppState) {
             }
         });
     });
-    if save
-        && let Some(profile) = build_profile(&state.connect_ui.add) {
-            state.profiles.push(profile);
-            state.profiles_dirty = true;
-            close = true;
-        }
+    if save && let Some(profile) = build_profile(&state.connect_ui.add) {
+        state.profiles.push(profile);
+        state.profiles_dirty = true;
+        close = true;
+    }
     if close {
         state.connect_ui.add = AddForm::default();
     }

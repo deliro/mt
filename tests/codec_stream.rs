@@ -25,9 +25,7 @@ fn decodes_one_frame_across_partial_reads() {
 fn decodes_two_frames_back_to_back() {
     let mut codec = FrameCodec;
     let mut buf = BytesMut::new();
-    buf.extend_from_slice(&[
-        0x94, 0xC3, 0x00, 0x01, b'a', 0x94, 0xC3, 0x00, 0x02, b'b', b'c',
-    ]);
+    buf.extend_from_slice(&[0x94, 0xC3, 0x00, 0x01, b'a', 0x94, 0xC3, 0x00, 0x02, b'b', b'c']);
     let first = codec.decode(&mut buf).expect("decode").expect("first");
     assert_eq!(first.as_slice(), b"a");
     let second = codec.decode(&mut buf).expect("decode").expect("second");

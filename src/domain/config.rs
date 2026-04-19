@@ -392,14 +392,12 @@ pub const REGION_CHOICES: &[RegionCode] = &[
 pub const MODEM_PRESET_CHOICES: &[ModemPreset] = &[
     ModemPreset::LongFast,
     ModemPreset::LongModerate,
-    ModemPreset::LongSlow,
     ModemPreset::MediumFast,
     ModemPreset::MediumSlow,
     ModemPreset::ShortFast,
     ModemPreset::ShortSlow,
     ModemPreset::ShortTurbo,
     ModemPreset::LongTurbo,
-    ModemPreset::VeryLongSlow,
 ];
 
 pub const DEVICE_ROLE_CHOICES: &[DeviceRole] = &[
@@ -408,9 +406,7 @@ pub const DEVICE_ROLE_CHOICES: &[DeviceRole] = &[
     DeviceRole::ClientHidden,
     DeviceRole::ClientBase,
     DeviceRole::Router,
-    DeviceRole::RouterClient,
     DeviceRole::RouterLate,
-    DeviceRole::Repeater,
     DeviceRole::Tracker,
     DeviceRole::Sensor,
     DeviceRole::Tak,
@@ -486,6 +482,7 @@ pub fn region_label(region: RegionCode) -> &'static str {
     }
 }
 
+#[allow(deprecated)]
 pub fn modem_preset_label(preset: ModemPreset) -> &'static str {
     match preset {
         ModemPreset::LongFast => "Long Fast",
@@ -501,6 +498,7 @@ pub fn modem_preset_label(preset: ModemPreset) -> &'static str {
     }
 }
 
+#[allow(deprecated)]
 pub const fn device_role_label(role: DeviceRole) -> &'static str {
     match role {
         DeviceRole::Client => "Client",

@@ -26,8 +26,7 @@ const MAX_PARALLEL: usize = 8;
 /// enough that normal panning / zooming won't hit it; when it does,
 /// the least-recently-queued entry is dropped.
 const MAX_PENDING: usize = 1024;
-const UV_UNIT: egui::Rect =
-    egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
+const UV_UNIT: egui::Rect = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
 /// OSM serves tiles up to zoom 19. Walkers' internal zoom cap is 26,
 /// so requests at zoom 20+ reach us and must be dropped before we try
 /// to fetch them.
@@ -65,14 +64,7 @@ impl SqliteTiles {
         }
 
         let cap = NonZeroUsize::new(MEMORY_CAPACITY).unwrap_or(NonZeroUsize::MIN);
-        Self {
-            attribution,
-            tile_size,
-            memory: LruCache::new(cap),
-            request_tx,
-            tile_rx,
-            ctx,
-        }
+        Self { attribution, tile_size, memory: LruCache::new(cap), request_tx, tile_rx, ctx }
     }
 
     /// Drop the in-memory texture cache so the next frame re-requests
@@ -140,17 +132,14 @@ fn run_loop(
             return;
         }
     };
-    let client = match reqwest::Client::builder()
-        .user_agent(USER_AGENT)
-        .timeout(HTTP_TIMEOUT)
-        .build()
-    {
-        Ok(c) => c,
-        Err(e) => {
-            error!(%e, "map-tiles: HTTP client build failed");
-            return;
-        }
-    };
+    let client =
+        match reqwest::Client::builder().user_agent(USER_AGENT).timeout(HTTP_TIMEOUT).build() {
+            Ok(c) => c,
+            Err(e) => {
+                error!(%e, "map-tiles: HTTP client build failed");
+                return;
+            }
+        };
     let conn = db_path.and_then(|path| match Connection::open(&path) {
         Ok(c) => Some(c),
         Err(e) => {
@@ -321,10 +310,7 @@ fn load_bytes(conn: &Connection, tile_id: TileId) -> Result<Option<Vec<u8>>, Til
 
 fn save_bytes(conn: &Connection, tile_id: TileId, bytes: &[u8]) -> Result<(), TileError> {
     let now_ms = i64::try_from(
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_millis())
-            .unwrap_or_default(),
+        SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or_default(),
     )
     .unwrap_or(i64::MAX);
     conn.execute(

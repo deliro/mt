@@ -76,10 +76,7 @@ fn channels_from_set(set: &meshtastic::ChannelSet) -> Vec<Channel> {
         .filter_map(|(i, s)| {
             let index = ChannelIndex::new(u8::try_from(i).ok()?)?;
             let role = if i == 0 { ChannelRole::Primary } else { ChannelRole::Secondary };
-            let position_precision = s
-                .module_settings
-                .as_ref()
-                .map_or(0, |m| m.position_precision);
+            let position_precision = s.module_settings.as_ref().map_or(0, |m| m.position_precision);
             Some(Channel {
                 index,
                 role,

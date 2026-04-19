@@ -88,12 +88,7 @@ impl LogsUi {
         if self.entries.len() >= CAPACITY {
             let _ = self.entries.pop_front();
         }
-        self.entries.push_back(Entry {
-            at,
-            level: Level::from_proto(level),
-            source,
-            message,
-        });
+        self.entries.push_back(Entry { at, level: Level::from_proto(level), source, message });
     }
 }
 
@@ -106,18 +101,10 @@ pub fn render(ui: &mut egui::Ui, state: &mut LogsUi) {
 fn toolbar(ui: &mut egui::Ui, state: &mut LogsUi) {
     ui.horizontal(|ui| {
         ui.label("Min level:");
-        for level in [
-            Level::Trace,
-            Level::Debug,
-            Level::Info,
-            Level::Warning,
-            Level::Error,
-            Level::Critical,
-        ] {
-            if ui
-                .selectable_label(state.min_level == level, level.label())
-                .clicked()
-            {
+        for level in
+            [Level::Trace, Level::Debug, Level::Info, Level::Warning, Level::Error, Level::Critical]
+        {
+            if ui.selectable_label(state.min_level == level, level.label()).clicked() {
                 state.min_level = level;
             }
         }
@@ -207,10 +194,8 @@ fn render_list(ui: &mut egui::Ui, state: &LogsUi) {
                         });
                         row.col(|ui| {
                             ui.add(
-                                egui::Label::new(
-                                    egui::RichText::new(&entry.message).monospace(),
-                                )
-                                .truncate(),
+                                egui::Label::new(egui::RichText::new(&entry.message).monospace())
+                                    .truncate(),
                             )
                             .on_hover_text(&entry.message);
                         });
@@ -223,13 +208,7 @@ fn render_list(ui: &mut egui::Ui, state: &LogsUi) {
 fn format_time(t: SystemTime) -> String {
     let offset = crate::ui::chat::local_offset();
     let dt = time::OffsetDateTime::from(t).to_offset(offset);
-    format!(
-        "{:02}:{:02}:{:02}.{:03}",
-        dt.hour(),
-        dt.minute(),
-        dt.second(),
-        dt.millisecond(),
-    )
+    format!("{:02}:{:02}:{:02}.{:03}", dt.hour(), dt.minute(), dt.second(), dt.millisecond())
 }
 
 fn export_text(state: &LogsUi) -> String {

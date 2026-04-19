@@ -107,10 +107,7 @@ fn render_signal(
 
     if response.dragged() {
         let delta = response.drag_delta();
-        state.signal_pan = egui::vec2(
-            state.signal_pan.x + delta.x,
-            state.signal_pan.y + delta.y,
-        );
+        state.signal_pan = egui::vec2(state.signal_pan.x + delta.x, state.signal_pan.y + delta.y);
     }
     if response.hovered() {
         let scroll = ui.input(|i| i.smooth_scroll_delta.y);
@@ -120,10 +117,8 @@ fn render_signal(
         }
     }
 
-    let center = egui::pos2(
-        rect.center().x + state.signal_pan.x,
-        rect.center().y + state.signal_pan.y,
-    );
+    let center =
+        egui::pos2(rect.center().x + state.signal_pan.x, rect.center().y + state.signal_pan.y);
     let rings = group_by_ring(snapshot);
     let total_rings = ring_count(&rings).max(1);
     let base_max_r = rect.width().min(rect.height()) * 0.45;
@@ -194,8 +189,7 @@ fn render_geographic_plane(
     }
 
     let available = ui.available_rect_before_wrap();
-    ui.painter()
-        .rect_filled(available, 0.0, ui.style().visuals.extreme_bg_color);
+    ui.painter().rect_filled(available, 0.0, ui.style().visuals.extreme_bg_color);
 
     let mut pending_zoom: Option<walkers::Position> = None;
     let current_zoom = state.map_memory.zoom();
@@ -262,11 +256,7 @@ fn reference_position(snapshot: &DeviceSnapshot) -> walkers::Position {
     }
 }
 
-fn draw_attribution(
-    ui: &egui::Ui,
-    rect: egui::Rect,
-    tiles: Option<&SqliteTiles>,
-) {
+fn draw_attribution(ui: &egui::Ui, rect: egui::Rect, tiles: Option<&SqliteTiles>) {
     let Some(tiles) = tiles else { return };
     let attribution = tiles.attribution();
     let text = format!("© {}", attribution.text);
@@ -317,14 +307,7 @@ impl walkers::Plugin for NodesOverlay<'_> {
         response: &egui::Response,
         projector: &walkers::Projector,
     ) {
-        let Self {
-            snapshot,
-            detail_node,
-            reference,
-            current_zoom,
-            max_zoom,
-            pending_zoom,
-        } = *self;
+        let Self { snapshot, detail_node, reference, current_zoom, max_zoom, pending_zoom } = *self;
         let can_zoom_in = current_zoom + 0.5 < max_zoom;
 
         let mut projected: Vec<(NodeId, egui::Pos2, walkers::Position)> = Vec::new();
@@ -337,9 +320,7 @@ impl walkers::Plugin for NodesOverlay<'_> {
 
         let self_pos = placements.iter().find_map(|pl| match &pl.kind {
             Marker::Node(id) if *id == snapshot.my_node => Some(pl.pos),
-            Marker::Cluster { members, .. } if members.contains(&snapshot.my_node) => {
-                Some(pl.pos)
-            }
+            Marker::Cluster { members, .. } if members.contains(&snapshot.my_node) => Some(pl.pos),
             _ => None,
         });
         let painter = ui.painter().clone();
@@ -373,23 +354,14 @@ impl walkers::Plugin for NodesOverlay<'_> {
 
         let scale_px_per_m = projector.scale_pixel_per_meter(reference);
         if scale_px_per_m > 0.0 && scale_px_per_m.is_finite() {
-            draw_scale_bar(
-                &painter,
-                response.rect,
-                f64::from(1.0 / scale_px_per_m),
-                ui.style(),
-            );
+            draw_scale_bar(&painter, response.rect, f64::from(1.0 / scale_px_per_m), ui.style());
         }
 
         handle_geo_interaction(ui, response, &placements, snapshot, detail_node, pending_zoom);
     }
 }
 
-fn render_no_gps(
-    ui: &mut egui::Ui,
-    snapshot: &DeviceSnapshot,
-    detail_node: &mut Option<NodeId>,
-) {
+fn render_no_gps(ui: &mut egui::Ui, snapshot: &DeviceSnapshot, detail_node: &mut Option<NodeId>) {
     ui.heading("No GPS");
     let mut list: Vec<&Node> = snapshot
         .nodes
@@ -469,11 +441,7 @@ struct SignalPlacement {
     direct_neighbor: bool,
 }
 
-fn layout_signal(
-    rings: &RingGrouping,
-    center: egui::Pos2,
-    ring_step: f32,
-) -> Vec<SignalPlacement> {
+fn layout_signal(rings: &RingGrouping, center: egui::Pos2, ring_step: f32) -> Vec<SignalPlacement> {
     let mut out = Vec::new();
     for (hops_idx, ids) in rings.known.iter().enumerate() {
         if ids.is_empty() {
@@ -501,10 +469,7 @@ fn place_ring(
     let phase = if ring_idx.is_multiple_of(2) { 0.0 } else { std::f32::consts::PI / count };
     for (i, id) in ids.iter().enumerate() {
         let theta = (i as f32 / count).mul_add(std::f32::consts::TAU, phase);
-        let pos = egui::pos2(
-            center.x + radius * theta.cos(),
-            center.y + radius * theta.sin(),
-        );
+        let pos = egui::pos2(center.x + radius * theta.cos(), center.y + radius * theta.sin());
         out.push(SignalPlacement { id: *id, pos, direct_neighbor });
     }
 }
@@ -575,11 +540,7 @@ fn nice_scale_meters(target: f64) -> f64 {
 }
 
 fn format_distance(m: f64) -> String {
-    if m >= 1_000.0 {
-        format!("{:.1} km", m / 1_000.0)
-    } else {
-        format!("{m:.0} m")
-    }
+    if m >= 1_000.0 { format!("{:.1} km", m / 1_000.0) } else { format!("{m:.0} m") }
 }
 
 fn draw_node(
@@ -785,10 +746,7 @@ fn legend_signal(
     }
     if !rings.unknown.is_empty() {
         let ring_num = rings.known.len().saturating_add(1);
-        lines.push(format!(
-            "ring {ring_num}: unknown · {} node(s)",
-            rings.unknown.len()
-        ));
+        lines.push(format!("ring {ring_num}: unknown · {} node(s)", rings.unknown.len()));
     }
     if lines.is_empty() {
         return;
@@ -868,9 +826,7 @@ fn handle_geo_interaction(
 }
 
 fn render_cluster_tooltip(ui: &mut egui::Ui, members: &[NodeId], snapshot: &DeviceSnapshot) {
-    ui.label(
-        egui::RichText::new(format!("{} nodes at this location", members.len())).strong(),
-    );
+    ui.label(egui::RichText::new(format!("{} nodes at this location", members.len())).strong());
     ui.separator();
     let max_lines = 12;
     for (i, id) in members.iter().enumerate() {
@@ -878,10 +834,7 @@ fn render_cluster_tooltip(ui: &mut egui::Ui, members: &[NodeId], snapshot: &Devi
             ui.weak(format!("… and {} more", members.len().saturating_sub(max_lines)));
             break;
         }
-        let name = snapshot
-            .nodes
-            .get(id)
-            .map_or_else(|| format!("!{:08x}", id.0), display_name);
+        let name = snapshot.nodes.get(id).map_or_else(|| format!("!{:08x}", id.0), display_name);
         ui.label(name);
     }
     ui.separator();

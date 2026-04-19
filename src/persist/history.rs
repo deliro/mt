@@ -237,11 +237,9 @@ impl HistoryStore {
     pub fn message_count(&self, my_node: NodeId) -> Result<i64, PersistError> {
         Ok(self
             .conn
-            .query_row(
-                "SELECT COUNT(*) FROM messages WHERE my_node = ?",
-                [my_node.0],
-                |r| r.get::<_, i64>(0),
-            )
+            .query_row("SELECT COUNT(*) FROM messages WHERE my_node = ?", [my_node.0], |r| {
+                r.get::<_, i64>(0)
+            })
             .optional()?
             .unwrap_or(0))
     }
@@ -289,9 +287,10 @@ impl HistoryStore {
     }
 
     pub fn upsert_node(&self, my_node: NodeId, node: &Node) -> Result<(), PersistError> {
-        let saved_at_ms =
-            i64::try_from(SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis())
-                .unwrap_or(0);
+        let saved_at_ms = i64::try_from(
+            SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis(),
+        )
+        .unwrap_or(0);
         let last_heard_ms = node
             .last_heard
             .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
@@ -350,11 +349,9 @@ impl HistoryStore {
     pub fn node_count(&self, my_node: NodeId) -> Result<i64, PersistError> {
         Ok(self
             .conn
-            .query_row(
-                "SELECT COUNT(*) FROM nodes WHERE my_node = ?",
-                [my_node.0],
-                |r| r.get::<_, i64>(0),
-            )
+            .query_row("SELECT COUNT(*) FROM nodes WHERE my_node = ?", [my_node.0], |r| {
+                r.get::<_, i64>(0)
+            })
             .optional()?
             .unwrap_or(0))
     }
@@ -403,8 +400,9 @@ struct StoredMessage {
 
 impl StoredMessage {
     fn into_message(self) -> Result<TextMessage, PersistError> {
-        let direction = code_to_direction(self.direction)
-            .ok_or_else(|| PersistError::StateDecode(format!("bad direction {}", self.direction)))?;
+        let direction = code_to_direction(self.direction).ok_or_else(|| {
+            PersistError::StateDecode(format!("bad direction {}", self.direction))
+        })?;
         let channel = ChannelIndex::new(self.channel)
             .ok_or_else(|| PersistError::StateDecode(format!("bad channel {}", self.channel)))?;
         let to = if self.to_node == BROADCAST_NODE.0 {

@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use eframe::egui;
-use rand::RngCore;
+use rand::Rng;
 use tokio::sync::mpsc;
 
 use crate::domain::channel::{Channel, ChannelRole};
@@ -188,8 +188,8 @@ fn channel_row_inner(ui: &mut egui::Ui, chs: &mut ChannelsUi, index: u8) {
     let is_expanded = chs.expanded.contains(&index);
 
     let header_resp = ui.horizontal(|ui| {
-        let btn = egui::Button::new(egui::RichText::new(title).strong())
-            .fill(egui::Color32::TRANSPARENT);
+        let btn =
+            egui::Button::new(egui::RichText::new(title).strong()).fill(egui::Color32::TRANSPARENT);
         let clicked = ui.add(btn).clicked();
         if dirty {
             ui.colored_label(egui::Color32::YELLOW, "● unsaved");
@@ -251,10 +251,9 @@ fn role_picker(ui: &mut egui::Ui, draft: &mut Channel, index: u8) -> bool {
             return;
         }
         let mut role = draft.role;
-        for (label, value) in [
-            ("Secondary", ChannelRole::Secondary),
-            ("Disabled", ChannelRole::Disabled),
-        ] {
+        for (label, value) in
+            [("Secondary", ChannelRole::Secondary), ("Disabled", ChannelRole::Disabled)]
+        {
             if ui.radio_value(&mut role, value, label).changed() {
                 changed = true;
             }
@@ -437,6 +436,6 @@ fn save_warning(index: u8, draft: &Channel) -> &'static str {
 
 fn random_psk(bytes: usize) -> Vec<u8> {
     let mut buf = vec![0u8; bytes];
-    rand::thread_rng().fill_bytes(&mut buf);
+    rand::rng().fill_bytes(&mut buf);
     buf
 }

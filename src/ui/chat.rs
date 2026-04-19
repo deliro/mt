@@ -54,7 +54,6 @@ fn search_bar(ui: &mut egui::Ui, state: &mut AppState) {
     });
 }
 
-
 pub fn render_composer(
     ui: &mut egui::Ui,
     state: &mut AppState,
@@ -136,18 +135,14 @@ fn message_list(ui: &mut egui::Ui, state: &mut AppState, active: ChannelIndex) {
         // NodeInfo arrives and changes line widths). Explicitly nudging to the
         // bottom avoids the chat from drifting upwards after events.
         ui.scroll_to_rect(
-            egui::Rect::from_min_size(
-                egui::pos2(0.0, f32::MAX - 1.0),
-                egui::vec2(1.0, 1.0),
-            ),
+            egui::Rect::from_min_size(egui::pos2(0.0, f32::MAX - 1.0), egui::vec2(1.0, 1.0)),
             Some(egui::Align::BOTTOM),
         );
         state.chat_ui.follow_bottom = false;
     }
 
     // If user scrolls up manually, respect that until a new message arrives.
-    let at_bottom =
-        out.state.offset.y >= out.content_size.y - out.inner_rect.height() - 2.0;
+    let at_bottom = out.state.offset.y >= out.content_size.y - out.inner_rect.height() - 2.0;
     if !at_bottom {
         state.chat_ui.follow_bottom = false;
     }
@@ -245,8 +240,7 @@ fn composer(
                 .hint_text("Write a message")
                 .desired_width(f32::INFINITY),
         );
-        let enter_pressed =
-            response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+        let enter_pressed = response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
         let clicked = ui.add_enabled(can_send, egui::Button::new("Send")).clicked();
         if (clicked || enter_pressed) && can_send {
             let text = std::mem::take(&mut state.chat_ui.composer_text);
@@ -324,7 +318,5 @@ fn format_time(t: SystemTime) -> String {
 /// `Err`.
 pub fn local_offset() -> time::UtcOffset {
     static OFFSET: OnceLock<time::UtcOffset> = OnceLock::new();
-    *OFFSET.get_or_init(|| {
-        time::UtcOffset::current_local_offset().unwrap_or(time::UtcOffset::UTC)
-    })
+    *OFFSET.get_or_init(|| time::UtcOffset::current_local_offset().unwrap_or(time::UtcOffset::UTC))
 }

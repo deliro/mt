@@ -10,22 +10,17 @@ use crate::domain::node::Node;
 use crate::domain::snapshot::DeviceSnapshot;
 
 const FLASH_DURATION: Duration = Duration::from_millis(1500);
-const ONLINE_THRESHOLD: Duration = Duration::from_secs(2 * 60 * 60);
+const ONLINE_THRESHOLD: Duration = Duration::from_hours(2);
 
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Default)]
 pub enum NodesSort {
+    #[default]
     LongName,
     ShortName,
     Battery,
     Snr,
     Hops,
     LastHeard,
-}
-
-impl Default for NodesSort {
-    fn default() -> Self {
-        Self::LongName
-    }
 }
 
 #[derive(Copy, Clone, Debug, Serialize, Deserialize, Default)]
@@ -208,17 +203,12 @@ fn toolbar(
             egui::Color32::from_rgb(120, 200, 120),
             format!("● {} online", counts.online),
         )
-        .on_hover_text(
-            "In the device's NodeDB and heard on the mesh within the last 2 hours.",
-        );
-        ui.colored_label(
-            egui::Color32::from_rgb(170, 170, 120),
-            format!("◐ {} idle", counts.idle),
-        )
-        .on_hover_text(
-            "In the device's NodeDB but not heard in the last 2 hours — they're still \
+        .on_hover_text("In the device's NodeDB and heard on the mesh within the last 2 hours.");
+        ui.colored_label(egui::Color32::from_rgb(170, 170, 120), format!("◐ {} idle", counts.idle))
+            .on_hover_text(
+                "In the device's NodeDB but not heard in the last 2 hours — they're still \
              tracked by the radio, just quiet.",
-        );
+            );
         ui.colored_label(egui::Color32::GRAY, format!("○ {} archived", counts.archived))
             .on_hover_text(
                 "Only in the local database; the device's NodeDB has dropped them. \
@@ -290,13 +280,8 @@ fn table(
                 let flash = (alpha > 0.0).then(|| flash_color(alpha));
                 let is_cached = !nodes_ui.seen_live.contains(&node.id);
                 let cached_saved_at = nodes_ui.persisted_saved_at.get(&node.id).copied();
-                let mut ctx = RowContext {
-                    flash,
-                    detail_node,
-                    now_system,
-                    is_cached,
-                    cached_saved_at,
-                };
+                let mut ctx =
+                    RowContext { flash, detail_node, now_system, is_cached, cached_saved_at };
                 body.row(18.0, |row| row_cells(row, node, &mut ctx));
             }
         });
@@ -317,18 +302,15 @@ fn header_button(
     current: NodesSortPref,
 ) -> egui::Response {
     let is_active = current.by == key;
-    let arrow = if is_active {
-        if current.ascending { " ▲" } else { " ▼" }
-    } else {
-        ""
-    };
+    let arrow = if is_active { if current.ascending { " ▲" } else { " ▼" } } else { "" };
     let text = egui::RichText::new(format!("{label}{arrow}")).strong();
-    ui.add(egui::Button::new(text).fill(egui::Color32::TRANSPARENT).frame(false))
-        .on_hover_text(if is_active {
+    ui.add(egui::Button::new(text).fill(egui::Color32::TRANSPARENT).frame(false)).on_hover_text(
+        if is_active {
             "Click to reverse sort direction."
         } else {
             "Click to sort by this column."
-        })
+        },
+    )
 }
 
 struct RowContext<'a> {
@@ -343,11 +325,7 @@ fn row_cells(row: egui_extras::TableRow<'_, '_>, node: &Node, ctx: &mut RowConte
     row_cells_inner(row, node, ctx);
 }
 
-fn row_cells_inner(
-    mut row: egui_extras::TableRow<'_, '_>,
-    node: &Node,
-    ctx: &mut RowContext<'_>,
-) {
+fn row_cells_inner(mut row: egui_extras::TableRow<'_, '_>, node: &Node, ctx: &mut RowContext<'_>) {
     let flash = ctx.flash;
     row.col(|ui| {
         paint_flash(ui, flash);
@@ -360,11 +338,7 @@ fn row_cells_inner(
         if node.is_ignored {
             text = text.strikethrough();
         }
-        let resp = ui.add(
-            egui::Label::new(text)
-                .truncate()
-                .sense(egui::Sense::click()),
-        );
+        let resp = ui.add(egui::Label::new(text).truncate().sense(egui::Sense::click()));
         if resp.clicked() {
             *ctx.detail_node = Some(node.id);
         }
@@ -377,27 +351,19 @@ fn row_cells_inner(
         flash,
         node.battery_level.map_or_else(|| "—".into(), |b| format!("{b}%")),
     );
-    truncated_cell(
-        &mut row,
-        flash,
-        node.snr_db.map_or_else(|| "—".into(), |s| format!("{s:.1}")),
-    );
-    truncated_cell(
-        &mut row,
-        flash,
-        node.hops_away.map_or_else(|| "—".into(), |h| format!("{h}")),
-    );
+    truncated_cell(&mut row, flash, node.snr_db.map_or_else(|| "—".into(), |s| format!("{s:.1}")));
+    truncated_cell(&mut row, flash, node.hops_away.map_or_else(|| "—".into(), |h| format!("{h}")));
     row.col(|ui| {
         paint_flash(ui, flash);
         if ctx.is_cached {
             let primary = format_last_heard(node.last_heard, ctx.now_system);
             let cached_age = format_cached_age(ctx.cached_saved_at, ctx.now_system);
             let label = format!("{primary} (cached {cached_age})");
-            ui.add(egui::Label::new(egui::RichText::new(label).color(egui::Color32::GRAY)).truncate());
-        } else {
             ui.add(
-                egui::Label::new(format_last_heard(node.last_heard, ctx.now_system)).truncate(),
+                egui::Label::new(egui::RichText::new(label).color(egui::Color32::GRAY)).truncate(),
             );
+        } else {
+            ui.add(egui::Label::new(format_last_heard(node.last_heard, ctx.now_system)).truncate());
         }
     });
     row.col(|ui| {
@@ -410,7 +376,11 @@ fn row_cells_inner(
     });
 }
 
-fn truncated_cell(row: &mut egui_extras::TableRow<'_, '_>, flash: Option<egui::Color32>, text: String) {
+fn truncated_cell(
+    row: &mut egui_extras::TableRow<'_, '_>,
+    flash: Option<egui::Color32>,
+    text: String,
+) {
     row.col(|ui| {
         paint_flash(ui, flash);
         ui.add(egui::Label::new(text).truncate());

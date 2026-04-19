@@ -1,4 +1,4 @@
-use rand::Rng;
+use rand::RngExt;
 use serde::{Deserialize, Serialize};
 
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Default, Serialize, Deserialize)]
@@ -30,7 +30,7 @@ pub struct PacketId(pub u32);
 
 impl PacketId {
     pub fn random() -> Self {
-        Self(rand::thread_rng().gen_range(1..=u32::MAX))
+        Self(rand::rng().random_range(1..=u32::MAX))
     }
 }
 
@@ -39,7 +39,7 @@ pub struct ConfigId(pub u32);
 
 impl ConfigId {
     pub fn random() -> Self {
-        Self(rand::thread_rng().gen_range(1..=u32::MAX))
+        Self(rand::rng().random_range(1..=u32::MAX))
     }
 }
 

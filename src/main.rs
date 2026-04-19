@@ -19,7 +19,9 @@ fn main() -> eframe::Result<()> {
     let _ = mt::ui::chat::local_offset();
 
     let _ = tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("warn,mt=info")))
+        .with_env_filter(
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("warn,mt=info")),
+        )
         .try_init();
 
     let store = match HistoryStore::open(&history_path()) {
@@ -96,4 +98,3 @@ fn main() -> eframe::Result<()> {
         }),
     )
 }
-

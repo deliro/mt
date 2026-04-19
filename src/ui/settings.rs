@@ -10,10 +10,9 @@ use crate::domain::config::{
     DISPLAY_UNITS_CHOICES, DeviceSettings, DisplaySettings, ExternalNotificationSettings,
     GPS_MODE_CHOICES, LoraSettings, MODEM_PRESET_CHOICES, MqttSettings, NeighborInfoSettings,
     NetworkSettings, ORIENTATION_CHOICES, PAIRING_MODE_CHOICES, PositionSettings, PowerSettings,
-    REBROADCAST_CHOICES, REGION_CHOICES, RangeTestSettings, SecuritySettings,
-    StoreForwardSettings, TelemetrySettings, clock_label, device_role_label, display_units_label,
-    gps_mode_label, modem_preset_label, orientation_label, pairing_mode_label, rebroadcast_label,
-    region_label,
+    REBROADCAST_CHOICES, REGION_CHOICES, RangeTestSettings, SecuritySettings, StoreForwardSettings,
+    TelemetrySettings, clock_label, device_role_label, display_units_label, gps_mode_label,
+    modem_preset_label, orientation_label, pairing_mode_label, rebroadcast_label, region_label,
 };
 use crate::domain::snapshot::DeviceSnapshot;
 use crate::session::commands::{AdminAction, Command};
@@ -233,9 +232,7 @@ fn admin_confirm_modal(
 fn storage_section(ui: &mut egui::Ui, s: &mut SettingsUi) {
     let msgs = s.stored_messages.map_or_else(|| "?".into(), |n| n.to_string());
     let nodes = s.stored_nodes.map_or_else(|| "?".into(), |n| n.to_string());
-    let tiles = s
-        .stored_tile_bytes
-        .map_or_else(|| "?".into(), format_bytes);
+    let tiles = s.stored_tile_bytes.map_or_else(|| "?".into(), format_bytes);
     ui.label(format!("Stored messages for this device: {msgs}"));
     ui.label(format!("Stored nodes for this device: {nodes}"));
     ui.label(format!("Map-tile cache: {tiles}"));
@@ -254,7 +251,9 @@ fn storage_section(ui: &mut egui::Ui, s: &mut SettingsUi) {
             s.pending_clear = Some(PendingClear::All);
         }
     });
-    ui.weak("Clears only the on-disk cache for this connected device. The mesh keeps its own copy.");
+    ui.weak(
+        "Clears only the on-disk cache for this connected device. The mesh keeps its own copy.",
+    );
 }
 
 fn format_bytes(n: u64) -> String {
@@ -451,11 +450,7 @@ fn device_section(ui: &mut egui::Ui, s: &mut SettingsUi, cmd: &mpsc::UnboundedSe
 
 // ---- Position ----
 
-fn position_section(
-    ui: &mut egui::Ui,
-    s: &mut SettingsUi,
-    cmd: &mpsc::UnboundedSender<Command>,
-) {
+fn position_section(ui: &mut egui::Ui, s: &mut SettingsUi, cmd: &mpsc::UnboundedSender<Command>) {
     let mut dirty = s.dirty.is(Section::Position);
     u32_drag(
         ui,
@@ -626,24 +621,12 @@ fn power_section(ui: &mut egui::Ui, s: &mut SettingsUi, cmd: &mpsc::UnboundedSen
         &mut dirty,
         "Once woken from light sleep by a LoRa packet, stay awake at least this long before sleeping again. 0 = default 10s.",
     );
-    commit(
-        s,
-        Section::Power,
-        dirty,
-        ui,
-        "Save Power",
-        cmd,
-        |d| Command::SetPower(d.power.clone()),
-    );
+    commit(s, Section::Power, dirty, ui, "Save Power", cmd, |d| Command::SetPower(d.power.clone()));
 }
 
 // ---- Network ----
 
-fn network_section(
-    ui: &mut egui::Ui,
-    s: &mut SettingsUi,
-    cmd: &mpsc::UnboundedSender<Command>,
-) {
+fn network_section(ui: &mut egui::Ui, s: &mut SettingsUi, cmd: &mpsc::UnboundedSender<Command>) {
     let mut dirty = s.dirty.is(Section::Network);
     checkbox(
         ui,
@@ -690,11 +673,7 @@ fn network_section(
 
 // ---- Display ----
 
-fn display_section(
-    ui: &mut egui::Ui,
-    s: &mut SettingsUi,
-    cmd: &mpsc::UnboundedSender<Command>,
-) {
+fn display_section(ui: &mut egui::Ui, s: &mut SettingsUi, cmd: &mpsc::UnboundedSender<Command>) {
     let mut dirty = s.dirty.is(Section::Display);
     u32_drag(
         ui,
@@ -753,24 +732,14 @@ fn display_section(
         &mut dirty,
         "Wake the OLED when the accelerometer detects a tap or motion. Requires a supported IMU chip on the board.",
     );
-    commit(
-        s,
-        Section::Display,
-        dirty,
-        ui,
-        "Save Display",
-        cmd,
-        |d| Command::SetDisplay(d.display.clone()),
-    );
+    commit(s, Section::Display, dirty, ui, "Save Display", cmd, |d| {
+        Command::SetDisplay(d.display.clone())
+    });
 }
 
 // ---- Bluetooth ----
 
-fn bluetooth_section(
-    ui: &mut egui::Ui,
-    s: &mut SettingsUi,
-    cmd: &mpsc::UnboundedSender<Command>,
-) {
+fn bluetooth_section(ui: &mut egui::Ui, s: &mut SettingsUi, cmd: &mpsc::UnboundedSender<Command>) {
     let mut dirty = s.dirty.is(Section::Bluetooth);
     checkbox(
         ui,
@@ -796,24 +765,14 @@ fn bluetooth_section(
         &mut dirty,
         "6-digit PIN used when Pairing mode is FixedPin. Ignored otherwise.",
     );
-    commit(
-        s,
-        Section::Bluetooth,
-        dirty,
-        ui,
-        "Save Bluetooth",
-        cmd,
-        |d| Command::SetBluetooth(d.bluetooth.clone()),
-    );
+    commit(s, Section::Bluetooth, dirty, ui, "Save Bluetooth", cmd, |d| {
+        Command::SetBluetooth(d.bluetooth.clone())
+    });
 }
 
 // ---- MQTT ----
 
-fn mqtt_section(
-    ui: &mut egui::Ui,
-    s: &mut SettingsUi,
-    cmd: &mpsc::UnboundedSender<Command>,
-) {
+fn mqtt_section(ui: &mut egui::Ui, s: &mut SettingsUi, cmd: &mpsc::UnboundedSender<Command>) {
     let mut dirty = s.dirty.is(Section::Mqtt);
     mqtt_transport_fields(ui, s, &mut dirty);
     mqtt_broker_fields(ui, s);
@@ -821,15 +780,7 @@ fn mqtt_section(
     ui.separator();
     ui.label(egui::RichText::new("Map reporting").strong());
     mqtt_map_fields(ui, s, &mut dirty);
-    commit(
-        s,
-        Section::Mqtt,
-        dirty,
-        ui,
-        "Save MQTT",
-        cmd,
-        |d| Command::SetMqtt(d.mqtt.clone()),
-    );
+    commit(s, Section::Mqtt, dirty, ui, "Save MQTT", cmd, |d| Command::SetMqtt(d.mqtt.clone()));
 }
 
 fn mqtt_transport_fields(ui: &mut egui::Ui, s: &mut SettingsUi, dirty: &mut bool) {
@@ -939,11 +890,7 @@ fn mqtt_map_fields(ui: &mut egui::Ui, s: &mut SettingsUi, dirty: &mut bool) {
 
 // ---- Telemetry ----
 
-fn telemetry_section(
-    ui: &mut egui::Ui,
-    s: &mut SettingsUi,
-    cmd: &mpsc::UnboundedSender<Command>,
-) {
+fn telemetry_section(ui: &mut egui::Ui, s: &mut SettingsUi, cmd: &mpsc::UnboundedSender<Command>) {
     let mut dirty = s.dirty.is(Section::Telemetry);
     ui.label(egui::RichText::new("Device").strong());
     telemetry_device_fields(ui, s, &mut dirty);
@@ -983,15 +930,9 @@ fn telemetry_section(
         &mut dirty,
         "heart-rate / SpO₂ / body-temp sensors",
     );
-    commit(
-        s,
-        Section::Telemetry,
-        dirty,
-        ui,
-        "Save Telemetry",
-        cmd,
-        |d| Command::SetTelemetryCfg(d.telemetry.clone()),
-    );
+    commit(s, Section::Telemetry, dirty, ui, "Save Telemetry", cmd, |d| {
+        Command::SetTelemetryCfg(d.telemetry.clone())
+    });
 }
 
 fn telemetry_device_fields(ui: &mut egui::Ui, s: &mut SettingsUi, dirty: &mut bool) {
@@ -1109,15 +1050,9 @@ fn neighbor_info_section(
         &mut dirty,
         "How often NeighborInfo is broadcast. Firmware enforces a minimum of 14400 (4 h) — smaller values are clamped to protect the airtime budget.",
     );
-    commit(
-        s,
-        Section::NeighborInfo,
-        dirty,
-        ui,
-        "Save Neighbor Info",
-        cmd,
-        |d| Command::SetNeighborInfo(d.neighbor_info.clone()),
-    );
+    commit(s, Section::NeighborInfo, dirty, ui, "Save Neighbor Info", cmd, |d| {
+        Command::SetNeighborInfo(d.neighbor_info.clone())
+    });
 }
 
 // ---- Store & Forward ----
@@ -1173,39 +1108,23 @@ fn store_forward_section(
         &mut dirty,
         "Ask the server for messages no older than this many seconds. 0 = firmware default (typically 1h).",
     );
-    commit(
-        s,
-        Section::StoreForward,
-        dirty,
-        ui,
-        "Save Store & Forward",
-        cmd,
-        |d| Command::SetStoreForward(d.store_forward.clone()),
-    );
+    commit(s, Section::StoreForward, dirty, ui, "Save Store & Forward", cmd, |d| {
+        Command::SetStoreForward(d.store_forward.clone())
+    });
 }
 
 // ---- Security ----
 
-fn security_section(
-    ui: &mut egui::Ui,
-    s: &mut SettingsUi,
-    cmd: &mpsc::UnboundedSender<Command>,
-) {
+fn security_section(ui: &mut egui::Ui, s: &mut SettingsUi, cmd: &mpsc::UnboundedSender<Command>) {
     let mut dirty = s.dirty.is(Section::Security);
     security_identity(ui, &s.draft.security);
     ui.separator();
     security_admin_keys(ui, s, &mut dirty);
     ui.separator();
     security_flags(ui, s, &mut dirty);
-    commit(
-        s,
-        Section::Security,
-        dirty,
-        ui,
-        "Save Security",
-        cmd,
-        |d| Command::SetSecurity(d.security.clone()),
-    );
+    commit(s, Section::Security, dirty, ui, "Save Security", cmd, |d| {
+        Command::SetSecurity(d.security.clone())
+    });
 }
 
 fn security_identity(ui: &mut egui::Ui, sec: &SecuritySettings) {
@@ -1220,26 +1139,31 @@ fn security_identity(ui: &mut egui::Ui, sec: &SecuritySettings) {
                 );
         } else {
             let b64 = STANDARD.encode(&sec.public_key);
-            ui.monospace(shorten(&b64, 24))
-                .on_hover_text(b64.as_str());
+            ui.monospace(shorten(&b64, 24)).on_hover_text(b64.as_str());
             if ui.small_button("Copy").clicked() {
                 ui.ctx().copy_text(b64);
             }
         }
     });
-    ui.label(egui::RichText::new(
-        "Your public key identifies this node. Share it with anyone who should be able to \
+    ui.label(
+        egui::RichText::new(
+            "Your public key identifies this node. Share it with anyone who should be able to \
          remote-admin this node (they paste it into their Admin keys list) or send you \
          direct messages on firmware ≥ 2.5.",
-    ).weak());
+        )
+        .weak(),
+    );
 }
 
 fn security_admin_keys(ui: &mut egui::Ui, s: &mut SettingsUi, dirty: &mut bool) {
     ui.label(egui::RichText::new("Admin keys (remote admin allowlist)").strong());
-    ui.label(egui::RichText::new(
-        "Up to 3 public keys that may administer this node over the mesh. If empty, the \
+    ui.label(
+        egui::RichText::new(
+            "Up to 3 public keys that may administer this node over the mesh. If empty, the \
          only way to admin this node is a direct physical connection (BLE / serial / TCP).",
-    ).weak());
+        )
+        .weak(),
+    );
     let mut remove: Option<usize> = None;
     for (idx, key) in s.draft.security.admin_keys.iter().enumerate() {
         ui.horizontal(|ui| {
@@ -1279,10 +1203,7 @@ fn security_admin_keys(ui: &mut egui::Ui, s: &mut SettingsUi, dirty: &mut bool) 
                 *dirty = true;
             }
             if !s.security_new_admin_key.trim().is_empty() && !valid {
-                ui.colored_label(
-                    egui::Color32::LIGHT_RED,
-                    "expected 32-byte base64 key",
-                );
+                ui.colored_label(egui::Color32::LIGHT_RED, "expected 32-byte base64 key");
             }
         });
     } else {
@@ -1337,11 +1258,7 @@ fn shorten(s: &str, take: usize) -> String {
 
 // ---- External Notification ----
 
-fn ext_notif_section(
-    ui: &mut egui::Ui,
-    s: &mut SettingsUi,
-    cmd: &mpsc::UnboundedSender<Command>,
-) {
+fn ext_notif_section(ui: &mut egui::Ui, s: &mut SettingsUi, cmd: &mpsc::UnboundedSender<Command>) {
     let mut dirty = s.dirty.is(Section::ExtNotif);
     checkbox(
         ui,
@@ -1360,15 +1277,9 @@ fn ext_notif_section(
     ui.separator();
     ui.label(egui::RichText::new("Sound").strong());
     ext_notif_sound(ui, s, &mut dirty);
-    commit(
-        s,
-        Section::ExtNotif,
-        dirty,
-        ui,
-        "Save External Notification",
-        cmd,
-        |d| Command::SetExtNotif(d.ext_notif.clone()),
-    );
+    commit(s, Section::ExtNotif, dirty, ui, "Save External Notification", cmd, |d| {
+        Command::SetExtNotif(d.ext_notif.clone())
+    });
 }
 
 fn ext_notif_timing(ui: &mut egui::Ui, s: &mut SettingsUi, dirty: &mut bool) {
@@ -1425,12 +1336,48 @@ fn ext_notif_outputs(ui: &mut egui::Ui, s: &mut SettingsUi, dirty: &mut bool) {
 }
 
 fn ext_notif_alerts(ui: &mut egui::Ui, s: &mut SettingsUi, dirty: &mut bool) {
-    checkbox(ui, "On message: LED", &mut s.draft.ext_notif.alerts.message.led, dirty, "Pulse the LED when a text message arrives.");
-    checkbox(ui, "On message: vibra", &mut s.draft.ext_notif.alerts.message.vibra, dirty, "Pulse the vibration motor on new text messages.");
-    checkbox(ui, "On message: buzzer", &mut s.draft.ext_notif.alerts.message.buzzer, dirty, "Beep the buzzer on new text messages.");
-    checkbox(ui, "On bell: LED", &mut s.draft.ext_notif.alerts.bell.led, dirty, "Pulse the LED when a bell character (\\x07) arrives — used by Canned Messages with 'send bell'.");
-    checkbox(ui, "On bell: vibra", &mut s.draft.ext_notif.alerts.bell.vibra, dirty, "Pulse the vibra on bell characters.");
-    checkbox(ui, "On bell: buzzer", &mut s.draft.ext_notif.alerts.bell.buzzer, dirty, "Beep the buzzer on bell characters.");
+    checkbox(
+        ui,
+        "On message: LED",
+        &mut s.draft.ext_notif.alerts.message.led,
+        dirty,
+        "Pulse the LED when a text message arrives.",
+    );
+    checkbox(
+        ui,
+        "On message: vibra",
+        &mut s.draft.ext_notif.alerts.message.vibra,
+        dirty,
+        "Pulse the vibration motor on new text messages.",
+    );
+    checkbox(
+        ui,
+        "On message: buzzer",
+        &mut s.draft.ext_notif.alerts.message.buzzer,
+        dirty,
+        "Beep the buzzer on new text messages.",
+    );
+    checkbox(
+        ui,
+        "On bell: LED",
+        &mut s.draft.ext_notif.alerts.bell.led,
+        dirty,
+        "Pulse the LED when a bell character (\\x07) arrives — used by Canned Messages with 'send bell'.",
+    );
+    checkbox(
+        ui,
+        "On bell: vibra",
+        &mut s.draft.ext_notif.alerts.bell.vibra,
+        dirty,
+        "Pulse the vibra on bell characters.",
+    );
+    checkbox(
+        ui,
+        "On bell: buzzer",
+        &mut s.draft.ext_notif.alerts.bell.buzzer,
+        dirty,
+        "Beep the buzzer on bell characters.",
+    );
 }
 
 fn ext_notif_sound(ui: &mut egui::Ui, s: &mut SettingsUi, dirty: &mut bool) {
@@ -1452,15 +1399,14 @@ fn ext_notif_sound(ui: &mut egui::Ui, s: &mut SettingsUi, dirty: &mut bool) {
 
 // ---- Canned Messages ----
 
-fn canned_section(
-    ui: &mut egui::Ui,
-    s: &mut SettingsUi,
-    cmd: &mpsc::UnboundedSender<Command>,
-) {
+fn canned_section(ui: &mut egui::Ui, s: &mut SettingsUi, cmd: &mpsc::UnboundedSender<Command>) {
     let mut dirty = s.dirty.is(Section::Canned);
-    ui.label(egui::RichText::new(
-        "Input device for selecting pre-canned message presets on headless devices.",
-    ).weak());
+    ui.label(
+        egui::RichText::new(
+            "Input device for selecting pre-canned message presets on headless devices.",
+        )
+        .weak(),
+    );
     checkbox(
         ui,
         "Rotary encoder",
@@ -1486,25 +1432,22 @@ fn canned_section(
     ui.label(egui::RichText::new("GPIO pins").strong());
     u32_drag(ui, "Pin A", &mut s.draft.canned.rotary_pin_a, 0..=64, &mut dirty, "Rotary A signal.");
     u32_drag(ui, "Pin B", &mut s.draft.canned.rotary_pin_b, 0..=64, &mut dirty, "Rotary B signal.");
-    u32_drag(ui, "Press pin", &mut s.draft.canned.rotary_pin_press, 0..=64, &mut dirty, "Encoder press-button pin.");
-    commit(
-        s,
-        Section::Canned,
-        dirty,
+    u32_drag(
         ui,
-        "Save Canned Messages",
-        cmd,
-        |d| Command::SetCanned(d.canned.clone()),
+        "Press pin",
+        &mut s.draft.canned.rotary_pin_press,
+        0..=64,
+        &mut dirty,
+        "Encoder press-button pin.",
     );
+    commit(s, Section::Canned, dirty, ui, "Save Canned Messages", cmd, |d| {
+        Command::SetCanned(d.canned.clone())
+    });
 }
 
 // ---- Range Test ----
 
-fn range_test_section(
-    ui: &mut egui::Ui,
-    s: &mut SettingsUi,
-    cmd: &mpsc::UnboundedSender<Command>,
-) {
+fn range_test_section(ui: &mut egui::Ui, s: &mut SettingsUi, cmd: &mpsc::UnboundedSender<Command>) {
     let mut dirty = s.dirty.is(Section::RangeTest);
     ui.colored_label(
         egui::Color32::YELLOW,
@@ -1539,15 +1482,9 @@ fn range_test_section(
         &mut dirty,
         "Wipe RangeTest.csv on every boot. Use for fresh test runs.",
     );
-    commit(
-        s,
-        Section::RangeTest,
-        dirty,
-        ui,
-        "Save Range Test",
-        cmd,
-        |d| Command::SetRangeTest(d.range_test.clone()),
-    );
+    commit(s, Section::RangeTest, dirty, ui, "Save Range Test", cmd, |d| {
+        Command::SetRangeTest(d.range_test.clone())
+    });
 }
 
 // ---- Backup / restore ----
@@ -1558,10 +1495,13 @@ fn backup_section(
     s: &mut SettingsUi,
     cmd: &mpsc::UnboundedSender<Command>,
 ) {
-    ui.label(egui::RichText::new(
-        "Export the current device configuration to JSON (for backup / cloning), or import a \
+    ui.label(
+        egui::RichText::new(
+            "Export the current device configuration to JSON (for backup / cloning), or import a \
          previous export. Security keys are intentionally omitted — they stay device-specific.",
-    ).weak());
+        )
+        .weak(),
+    );
     ui.horizontal(|ui| {
         if ui
             .button("Copy config JSON")
@@ -1636,10 +1576,7 @@ fn backup_import_modal(
                     s.backup_import_open = false;
                 }
                 if ui
-                    .add(
-                        egui::Button::new("Apply")
-                            .fill(egui::Color32::from_rgb(150, 40, 40)),
-                    )
+                    .add(egui::Button::new("Apply").fill(egui::Color32::from_rgb(150, 40, 40)))
                     .clicked()
                 {
                     apply = true;
@@ -1663,7 +1600,8 @@ fn apply_import(
             s.backup_import_open = false;
             s.backup_import_text.clear();
             s.backup_import_error = None;
-            s.backup_last_action = Some("Import dispatched — watch for each Save to echo back".into());
+            s.backup_last_action =
+                Some("Import dispatched — watch for each Save to echo back".into());
         }
         Err(e) => {
             s.backup_import_error = Some(e.to_string());
@@ -1726,13 +1664,10 @@ fn dispatch_security_import(
     let Some(policy) = export.security_policy.as_ref() else { return };
     // Preserve the device's own keypair — the export never carried it, and
     // SetConfig(Security) with an empty keypair would wipe it on the target.
-    let (public_key, private_key) = snapshot
-        .security
-        .as_ref()
-        .map_or_else(
-            || (Vec::new(), Vec::new()),
-            |s| (s.public_key.clone(), s.private_key.clone()),
-        );
+    let (public_key, private_key) = snapshot.security.as_ref().map_or_else(
+        || (Vec::new(), Vec::new()),
+        |s| (s.public_key.clone(), s.private_key.clone()),
+    );
     let _ = cmd.send(Command::SetSecurity(crate::domain::config::SecuritySettings {
         public_key,
         private_key,
@@ -1785,10 +1720,13 @@ fn dispatch_fixed_position_import(
 // ---- Alerts ----
 
 fn alerts_section(ui: &mut egui::Ui, snapshot: &DeviceSnapshot, ctx: AlertsCtx<'_>) {
-    ui.label(egui::RichText::new(
-        "Fires native OS notifications on chosen mesh events. Runs entirely in this app; \
+    ui.label(
+        egui::RichText::new(
+            "Fires native OS notifications on chosen mesh events. Runs entirely in this app; \
          the device doesn't know about these rules.",
-    ).weak());
+        )
+        .weak(),
+    );
     let AlertsCtx { config, dirty } = ctx;
     if ui.checkbox(&mut config.enabled, "Alerts enabled").changed() {
         *dirty = true;
@@ -1808,10 +1746,13 @@ fn alerts_keywords(
     dirty: &mut bool,
 ) {
     ui.label(egui::RichText::new("Keywords").strong());
-    ui.label(egui::RichText::new(
-        "Any message (DM or broadcast) containing one of these words fires an alert. \
+    ui.label(
+        egui::RichText::new(
+            "Any message (DM or broadcast) containing one of these words fires an alert. \
          Matching is case-insensitive.",
-    ).weak());
+        )
+        .weak(),
+    );
     let mut remove: Option<usize> = None;
     for (idx, kw) in config.keywords.iter().enumerate() {
         ui.horizontal(|ui| {
@@ -1831,9 +1772,7 @@ fn alerts_keywords(
         let id = ui.id().with("alerts_kw_input");
         let mut input = ui.data(|d| d.get_temp::<String>(id)).unwrap_or_default();
         ui.add(
-            egui::TextEdit::singleline(&mut input)
-                .hint_text("add keyword")
-                .desired_width(200.0),
+            egui::TextEdit::singleline(&mut input).hint_text("add keyword").desired_width(200.0),
         );
         if ui.button("Add").clicked() && !input.trim().is_empty() {
             config.keywords.push(input.trim().to_owned());
@@ -1851,10 +1790,13 @@ fn alerts_battery_rules(
     dirty: &mut bool,
 ) {
     ui.label(egui::RichText::new("Battery thresholds").strong());
-    ui.label(egui::RichText::new(
-        "Alert when the battery level of a tracked node drops below the threshold. Fires \
+    ui.label(
+        egui::RichText::new(
+            "Alert when the battery level of a tracked node drops below the threshold. Fires \
          once per crossing (no spam at every telemetry update).",
-    ).weak());
+        )
+        .weak(),
+    );
     let mut remove: Option<usize> = None;
     for (idx, rule) in config.battery_rules.iter().enumerate() {
         ui.horizontal(|ui| {
@@ -1885,16 +1827,11 @@ fn alerts_battery_add_row(
 ) {
     let node_id_input_key = ui.id().with("alerts_bat_node");
     let threshold_key = ui.id().with("alerts_bat_threshold");
-    let mut node_id_str: String = ui
-        .data(|d| d.get_temp::<String>(node_id_input_key))
-        .unwrap_or_default();
+    let mut node_id_str: String =
+        ui.data(|d| d.get_temp::<String>(node_id_input_key)).unwrap_or_default();
     let mut threshold: u8 = ui.data(|d| d.get_temp::<u8>(threshold_key)).unwrap_or(20);
     let node_options: Vec<(crate::domain::ids::NodeId, String)> = {
-        let mut v: Vec<_> = snapshot
-            .nodes
-            .values()
-            .map(|n| (n.id, node_display_name(n)))
-            .collect();
+        let mut v: Vec<_> = snapshot.nodes.values().map(|n| (n.id, node_display_name(n))).collect();
         v.sort_by(|a, b| a.1.cmp(&b.1));
         v
     };
@@ -1909,10 +1846,7 @@ fn alerts_battery_add_row(
             .show_ui(ui, |ui| {
                 for (id, name) in &node_options {
                     let label = format!("{name} !{:08x}", id.0);
-                    if ui
-                        .selectable_label(node_id_str == label, &label)
-                        .clicked()
-                    {
+                    if ui.selectable_label(node_id_str == label, &label).clicked() {
                         node_id_str.clone_from(&label);
                     }
                 }
@@ -1924,10 +1858,9 @@ fn alerts_battery_add_row(
                 label == node_id_str
             })
         {
-            config.battery_rules.push(crate::ui::alerts::BatteryRule {
-                node: *id,
-                threshold_percent: threshold,
-            });
+            config
+                .battery_rules
+                .push(crate::ui::alerts::BatteryRule { node: *id, threshold_percent: threshold });
             node_id_str.clear();
             *dirty = true;
         }
@@ -2170,11 +2103,7 @@ fn sync_from_snapshot(snapshot: &DeviceSnapshot, s: &mut SettingsUi) {
         &mut s.draft.store_forward,
         s.dirty.is(Section::StoreForward),
     );
-    sync_section(
-        snapshot.security.as_ref(),
-        &mut s.draft.security,
-        s.dirty.is(Section::Security),
-    );
+    sync_section(snapshot.security.as_ref(), &mut s.draft.security, s.dirty.is(Section::Security));
     sync_section(
         snapshot.ext_notif.as_ref(),
         &mut s.draft.ext_notif,
@@ -2192,8 +2121,7 @@ fn sync_from_snapshot(snapshot: &DeviceSnapshot, s: &mut SettingsUi) {
             s.draft.fixed_lon = pos.longitude_deg;
             s.draft.fixed_alt = pos.altitude_m.unwrap_or(0);
         }
-        s.previous_fixed_enabled =
-            snapshot.position.as_ref().is_some_and(|p| p.fixed_position);
+        s.previous_fixed_enabled = snapshot.position.as_ref().is_some_and(|p| p.fixed_position);
     }
 }
 

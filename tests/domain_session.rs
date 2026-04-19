@@ -118,10 +118,8 @@ fn ready_updates_node_metrics() {
     let s = apply(s, HandshakeFragment::MyNode { id: NodeId(1) });
     let s = apply(s, HandshakeFragment::Node(node(2, "n")));
     let s = apply(s, HandshakeFragment::ConfigComplete { id: ConfigId(1) });
-    let s = apply(
-        s,
-        HandshakeFragment::NodeMetric { id: NodeId(2), update: NodeMetric::Battery(73) },
-    );
+    let s =
+        apply(s, HandshakeFragment::NodeMetric { id: NodeId(2), update: NodeMetric::Battery(73) });
     match s {
         SessionState::Ready(snap) => {
             assert_eq!(snap.nodes.get(&NodeId(2)).and_then(|n| n.battery_level), Some(73));

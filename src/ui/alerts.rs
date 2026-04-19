@@ -25,12 +25,7 @@ pub struct AlertConfig {
 
 impl Default for AlertConfig {
     fn default() -> Self {
-        Self {
-            enabled: true,
-            notify_on_dm: true,
-            keywords: Vec::new(),
-            battery_rules: Vec::new(),
-        }
+        Self { enabled: true, notify_on_dm: true, keywords: Vec::new(), battery_rules: Vec::new() }
     }
 }
 
@@ -69,10 +64,7 @@ pub fn on_message(
     let mut out = Vec::new();
     let is_dm = matches!(msg.to, Recipient::Node(id) if id == my_node);
     if is_dm && cfg.notify_on_dm {
-        out.push(AlertEvent {
-            title: format!("DM from {sender_name}"),
-            body: msg.text.clone(),
-        });
+        out.push(AlertEvent { title: format!("DM from {sender_name}"), body: msg.text.clone() });
     }
     if !cfg.keywords.is_empty() {
         let text_lc = msg.text.to_lowercase();
@@ -96,11 +88,7 @@ pub fn on_message(
 
 /// Evaluate rules for a node update. Returns alerts to fire and mutates
 /// the runtime's `last_battery` bookkeeping.
-pub fn on_node(
-    cfg: &AlertConfig,
-    runtime: &mut AlertRuntime,
-    node: &Node,
-) -> Vec<AlertEvent> {
+pub fn on_node(cfg: &AlertConfig, runtime: &mut AlertRuntime, node: &Node) -> Vec<AlertEvent> {
     if !cfg.enabled {
         return Vec::new();
     }

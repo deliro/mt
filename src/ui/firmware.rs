@@ -21,8 +21,7 @@ pub fn parse_version(raw: &str) -> Option<(u32, u32)> {
 pub fn is_below_parity(raw: &str) -> bool {
     match parse_version(raw) {
         Some((major, minor)) => {
-            major < MIN_PARITY_MAJOR
-                || (major == MIN_PARITY_MAJOR && minor < MIN_PARITY_MINOR)
+            major < MIN_PARITY_MAJOR || (major == MIN_PARITY_MAJOR && minor < MIN_PARITY_MINOR)
         }
         None => false,
     }

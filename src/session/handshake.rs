@@ -109,6 +109,7 @@ pub fn node_from_proto(ni: &meshtastic::NodeInfo) -> Node {
     }
 }
 
+#[allow(deprecated)]
 fn role_from_proto(role: meshtastic::config::device_config::Role) -> NodeRole {
     use meshtastic::config::device_config::Role;
     match role {
@@ -235,10 +236,7 @@ pub const fn ext_notif_from_proto(
                 buzzer: e.alert_bell_buzzer,
             },
         },
-        sound: ExtNotifSound {
-            use_pwm: e.use_pwm,
-            use_i2s_as_buzzer: e.use_i2s_as_buzzer,
-        },
+        sound: ExtNotifSound { use_pwm: e.use_pwm, use_i2s_as_buzzer: e.use_i2s_as_buzzer },
     }
 }
 
@@ -315,10 +313,8 @@ pub fn telemetry_from_proto(t: &meshtastic::module_config::TelemetryConfig) -> T
 
 pub fn mqtt_from_proto(m: &meshtastic::module_config::MqttConfig) -> MqttSettings {
     use crate::domain::config::{MqttMapReport, MqttPayloadOptions};
-    let (pub_secs, pos_prec, report_loc) = m
-        .map_report_settings
-        .as_ref()
-        .map_or((0, 0, false), |s| {
+    let (pub_secs, pos_prec, report_loc) =
+        m.map_report_settings.as_ref().map_or((0, 0, false), |s| {
             (s.publish_interval_secs, s.position_precision, s.should_report_location)
         });
     MqttSettings {
@@ -329,10 +325,7 @@ pub fn mqtt_from_proto(m: &meshtastic::module_config::MqttConfig) -> MqttSetting
         root: m.root.clone(),
         tls_enabled: m.tls_enabled,
         proxy_to_client_enabled: m.proxy_to_client_enabled,
-        payload: MqttPayloadOptions {
-            encrypted: m.encryption_enabled,
-            json: m.json_enabled,
-        },
+        payload: MqttPayloadOptions { encrypted: m.encryption_enabled, json: m.json_enabled },
         map: MqttMapReport {
             enabled: m.map_reporting_enabled,
             publish_location: report_loc,
@@ -435,7 +428,11 @@ pub fn display_from_proto(d: &meshtastic::config::DisplayConfig) -> DisplaySetti
     DisplaySettings {
         screen_on_secs: d.screen_on_secs,
         auto_carousel_secs: d.auto_screen_carousel_secs,
-        orientation: if d.flip_screen { ScreenOrientation::Flipped } else { ScreenOrientation::Normal },
+        orientation: if d.flip_screen {
+            ScreenOrientation::Flipped
+        } else {
+            ScreenOrientation::Normal
+        },
         units: d.units(),
         clock: if d.use_12h_clock { ClockFormat::H12 } else { ClockFormat::H24 },
         heading_bold: d.heading_bold,

@@ -48,11 +48,9 @@ pub async fn scan_stream(
         emit_peripheral(&p, &sink).await;
     }
 
-    let deadline = tokio::time::Instant::now()
-        .checked_add(duration)
-        .unwrap_or_else(tokio::time::Instant::now);
-    let mut last_emitted: std::collections::HashSet<String> =
-        std::collections::HashSet::default();
+    let deadline =
+        tokio::time::Instant::now().checked_add(duration).unwrap_or_else(tokio::time::Instant::now);
+    let mut last_emitted: std::collections::HashSet<String> = std::collections::HashSet::default();
     loop {
         let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
         if remaining.is_zero() {
@@ -67,7 +65,9 @@ pub async fn scan_stream(
             CentralEvent::DeviceDiscovered(id) | CentralEvent::DeviceUpdated(id) => id,
             CentralEvent::DeviceConnected(_)
             | CentralEvent::DeviceDisconnected(_)
+            | CentralEvent::DeviceServicesModified(_)
             | CentralEvent::ManufacturerDataAdvertisement { .. }
+            | CentralEvent::RssiUpdate { .. }
             | CentralEvent::ServiceDataAdvertisement { .. }
             | CentralEvent::ServicesAdvertisement { .. }
             | CentralEvent::StateUpdate(_) => continue,
@@ -82,10 +82,7 @@ pub async fn scan_stream(
     Ok(())
 }
 
-async fn emit_peripheral(
-    p: &PlatformPeripheral,
-    sink: &mpsc::UnboundedSender<Discovered>,
-) {
+async fn emit_peripheral(p: &PlatformPeripheral, sink: &mpsc::UnboundedSender<Discovered>) {
     let Ok(Some(props)) = p.properties().await else { return };
     if !props.services.contains(&SERVICE_UUID) {
         return;
@@ -94,21 +91,11 @@ async fn emit_peripheral(
     let address = BleAddress::new(p.id().to_string());
     let name = props.local_name.clone().unwrap_or_else(|| "Meshtastic".into());
     debug!(%name, id = %address.as_str(), connected = is_connected, "ble scan row");
-    let _ = sink.send(Discovered {
-        name,
-        address,
-        rssi_dbm: props.rssi,
-        is_paired: is_connected,
-    });
+    let _ = sink.send(Discovered { name, address, rssi_dbm: props.rssi, is_paired: is_connected });
 }
 
 async fn find_by_id(adapter: &Adapter, id: &PeripheralId) -> Option<PlatformPeripheral> {
-    adapter
-        .peripherals()
-        .await
-        .ok()?
-        .into_iter()
-        .find(|p| &p.id() == id)
+    adapter.peripherals().await.ok()?.into_iter().find(|p| &p.id() == id)
 }
 
 pub async fn connect(address: &BleAddress) -> Result<BoxedTransport, ConnectError> {
@@ -124,10 +111,7 @@ pub async fn connect(address: &BleAddress) -> Result<BoxedTransport, ConnectErro
     }
     info!("ble connect: gatt connected");
 
-    peripheral
-        .discover_services()
-        .await
-        .map_err(|e| ConnectError::BleGatt(e.to_string()))?;
+    peripheral.discover_services().await.map_err(|e| ConnectError::BleGatt(e.to_string()))?;
     info!("ble connect: services discovered");
 
     let chars = peripheral.characteristics();
@@ -173,9 +157,7 @@ async fn find_in_adapter(
 ) -> Result<Option<PlatformPeripheral>, ConnectError> {
     let peripherals =
         adapter.peripherals().await.map_err(|e| ConnectError::BleGatt(e.to_string()))?;
-    Ok(peripherals
-        .into_iter()
-        .find(|p| p.id().to_string().eq_ignore_ascii_case(address.as_str())))
+    Ok(peripherals.into_iter().find(|p| p.id().to_string().eq_ignore_ascii_case(address.as_str())))
 }
 
 async fn first_adapter(manager: &Manager) -> Result<Adapter, ConnectError> {
@@ -225,10 +207,8 @@ impl BleTransport {
         to_radio: Characteristic,
         from_radio: Characteristic,
     ) -> Result<Self, ConnectError> {
-        let notifications = peripheral
-            .notifications()
-            .await
-            .map_err(|e| ConnectError::BleGatt(e.to_string()))?;
+        let notifications =
+            peripheral.notifications().await.map_err(|e| ConnectError::BleGatt(e.to_string()))?;
         let (out_tx, out_rx) = mpsc::unbounded_channel::<Vec<u8>>();
         let (in_tx, in_rx) = mpsc::unbounded_channel();
 

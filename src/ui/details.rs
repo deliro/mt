@@ -8,8 +8,8 @@ use crate::domain::node::Node;
 use crate::domain::snapshot::DeviceSnapshot;
 use crate::domain::traceroute::TracerouteResult;
 use crate::session::commands::Command;
-use crate::ui::{AppState, Tab, TracerouteUi};
 use crate::ui::nodes::NodesUi;
+use crate::ui::{AppState, Tab, TracerouteUi};
 
 pub fn render_overlay(
     ctx: &egui::Context,
@@ -18,11 +18,8 @@ pub fn render_overlay(
 ) {
     let Some(id) = state.detail_node else { return };
     let is_self = id == state.snapshot.my_node;
-    let title = state
-        .snapshot
-        .nodes
-        .get(&id)
-        .map_or_else(|| format!("!{:08x}", id.0), display_name);
+    let title =
+        state.snapshot.nodes.get(&id).map_or_else(|| format!("!{:08x}", id.0), display_name);
 
     let mut open = true;
     let mut action: Option<Action> = None;
@@ -151,15 +148,13 @@ fn apply_action(
         Action::ToggleFavorite => {
             if let Some(node) = state.snapshot.nodes.get_mut(&id) {
                 node.is_favorite = !node.is_favorite;
-                let _ = cmd
-                    .send(Command::SetFavorite { node: id, favorite: node.is_favorite });
+                let _ = cmd.send(Command::SetFavorite { node: id, favorite: node.is_favorite });
             }
         }
         Action::ToggleIgnored => {
             if let Some(node) = state.snapshot.nodes.get_mut(&id) {
                 node.is_ignored = !node.is_ignored;
-                let _ =
-                    cmd.send(Command::SetIgnored { node: id, ignored: node.is_ignored });
+                let _ = cmd.send(Command::SetIgnored { node: id, ignored: node.is_ignored });
             }
         }
         Action::SendMessage => {
@@ -249,9 +244,7 @@ const fn hop_arrow(i: usize) -> &'static str {
 
 fn render_scorecard(ui: &mut egui::Ui, id: NodeId, nodes_ui: &NodesUi) {
     let Some(stats) = nodes_ui.session_stats.get(&id) else {
-        ui.label(
-            egui::RichText::new("This session: not heard yet.").weak(),
-        );
+        ui.label(egui::RichText::new("This session: not heard yet.").weak());
         return;
     };
     let now = std::time::Instant::now();
@@ -290,11 +283,9 @@ fn human_ago(secs: u64) -> String {
 }
 
 fn render_body(ui: &mut egui::Ui, node: &Node) {
-    egui::Grid::new("node_detail_grid")
-        .num_columns(2)
-        .striped(true)
-        .spacing([24.0, 4.0])
-        .show(ui, |ui| {
+    egui::Grid::new("node_detail_grid").num_columns(2).striped(true).spacing([24.0, 4.0]).show(
+        ui,
+        |ui| {
             row(ui, "ID", format!("!{:08x}  ({})", node.id.0, node.id.0));
             row(ui, "Long name", non_empty_or(&node.long_name, "—"));
             row(ui, "Short name", non_empty_or(&node.short_name, "—"));
@@ -325,7 +316,8 @@ fn render_body(ui: &mut egui::Ui, node: &Node) {
             } else {
                 row(ui, "Position", "—".to_owned());
             }
-        });
+        },
+    );
 }
 
 fn row(ui: &mut egui::Ui, label: &str, value: impl Into<String>) {
