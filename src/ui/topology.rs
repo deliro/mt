@@ -197,13 +197,31 @@ fn render_geographic_plane(
     ui.painter()
         .rect_filled(available, 0.0, ui.style().visuals.extreme_bg_color);
 
-    let overlay = NodesOverlay { snapshot, detail_node, reference };
+    let mut pending_zoom: Option<walkers::Position> = None;
+    let current_zoom = state.map_memory.zoom();
+    let overlay = NodesOverlay {
+        snapshot,
+        detail_node,
+        reference,
+        current_zoom,
+        max_zoom: MAX_ZOOM,
+        pending_zoom: &mut pending_zoom,
+    };
     let tiles = state.map_tiles.as_mut().map(|t| t as &mut dyn walkers::Tiles);
     let map = walkers::Map::new(tiles, &mut state.map_memory, reference).with_plugin(overlay);
     let response = ui.add(map);
 
+    if let Some(target) = pending_zoom {
+        state.map_memory.center_at(target);
+        let new_zoom = (current_zoom + 1.5).min(MAX_ZOOM);
+        let _ = state.map_memory.set_zoom(new_zoom);
+        ui.ctx().request_repaint();
+    }
+
     draw_attribution(ui, response.rect, state.map_tiles.as_ref());
 }
+
+const MAX_ZOOM: f64 = 19.0;
 
 fn my_node_position(snapshot: &DeviceSnapshot) -> Option<walkers::Position> {
     snapshot
@@ -270,6 +288,20 @@ struct NodesOverlay<'a> {
     snapshot: &'a DeviceSnapshot,
     detail_node: &'a mut Option<NodeId>,
     reference: walkers::Position,
+    current_zoom: f64,
+    max_zoom: f64,
+    pending_zoom: &'a mut Option<walkers::Position>,
+}
+
+enum Marker {
+    Node(NodeId),
+    Cluster { members: Vec<NodeId>, centroid_latlon: walkers::Position },
+}
+
+struct Placement {
+    kind: Marker,
+    pos: egui::Pos2,
+    radius: f32,
 }
 
 impl walkers::Plugin for NodesOverlay<'_> {
@@ -279,24 +311,36 @@ impl walkers::Plugin for NodesOverlay<'_> {
         response: &egui::Response,
         projector: &walkers::Projector,
     ) {
-        let Self { snapshot, detail_node, reference } = *self;
-        let mut placements: Vec<(NodeId, egui::Pos2)> = Vec::new();
+        let Self {
+            snapshot,
+            detail_node,
+            reference,
+            current_zoom,
+            max_zoom,
+            pending_zoom,
+        } = *self;
+        let can_zoom_in = current_zoom + 0.5 < max_zoom;
+
+        let mut projected: Vec<(NodeId, egui::Pos2, walkers::Position)> = Vec::new();
         for (id, n) in &snapshot.nodes {
             let Some(p) = &n.position else { continue };
-            let vec = projector
-                .project(walkers::Position::from_lat_lon(p.latitude_deg, p.longitude_deg));
-            placements.push((*id, vec.to_pos2()));
+            let pos = walkers::Position::from_lat_lon(p.latitude_deg, p.longitude_deg);
+            projected.push((*id, projector.project(pos).to_pos2(), pos));
         }
-        spread_overlapping(&mut placements);
+        let placements = cluster_placements(&projected, can_zoom_in, snapshot);
 
-        let self_pos = placements
-            .iter()
-            .find(|(id, _)| *id == snapshot.my_node)
-            .map(|(_, pos)| *pos);
+        let self_pos = placements.iter().find_map(|pl| match &pl.kind {
+            Marker::Node(id) if *id == snapshot.my_node => Some(pl.pos),
+            Marker::Cluster { members, .. } if members.contains(&snapshot.my_node) => {
+                Some(pl.pos)
+            }
+            _ => None,
+        });
         let painter = ui.painter().clone();
 
         if let Some(origin) = self_pos {
-            for (id, pos) in &placements {
+            for pl in &placements {
+                let Marker::Node(id) = &pl.kind else { continue };
                 if *id == snapshot.my_node {
                     continue;
                 }
@@ -305,13 +349,20 @@ impl walkers::Plugin for NodesOverlay<'_> {
                     continue;
                 }
                 let snr = snapshot.nodes.get(id).and_then(|n| n.snr_db);
-                painter.line_segment([origin, *pos], edge_stroke(snr));
+                painter.line_segment([origin, pl.pos], edge_stroke(snr));
             }
         }
 
-        for (id, pos) in &placements {
-            let is_self = *id == snapshot.my_node;
-            draw_node(&painter, *pos, *id, snapshot, is_self, ui.style());
+        for pl in &placements {
+            match &pl.kind {
+                Marker::Node(id) => {
+                    let is_self = *id == snapshot.my_node;
+                    draw_node(&painter, pl.pos, *id, snapshot, is_self, ui.style());
+                }
+                Marker::Cluster { members, .. } => {
+                    draw_cluster(&painter, pl.pos, pl.radius, members.len(), ui.style());
+                }
+            }
         }
 
         let scale_px_per_m = projector.scale_pixel_per_meter(reference);
@@ -324,7 +375,7 @@ impl walkers::Plugin for NodesOverlay<'_> {
             );
         }
 
-        handle_interaction(ui, response, &placements, snapshot, detail_node);
+        handle_geo_interaction(ui, response, &placements, snapshot, detail_node, pending_zoom);
     }
 }
 
@@ -559,73 +610,135 @@ fn draw_node(
     );
 }
 
-/// Detect nodes whose projected pixel positions collide and fan them
-/// out around a shared centroid on a small ring. Same-GPS nodes (the
-/// common cause — several devices at one location) end up on a neat
-/// circle so every circle + label stays legible.
-///
-/// Simple single-pass clustering: for each not-yet-clustered node,
-/// pull in every later node within `MERGE_DIST` pixels of it. For the
-/// same-coord case that's all we need.
-fn spread_overlapping(placements: &mut [(NodeId, egui::Pos2)]) {
-    const MERGE_DIST: f32 = 22.0;
-    let n = placements.len();
-    if n < 2 {
-        return;
+/// Group projected nodes that land within `MERGE_DIST` pixels of each
+/// other. If we can zoom further in, collapse them into a single fat
+/// cluster marker; otherwise (at max zoom) fan them around a shared
+/// centroid so at least every label remains legible.
+fn cluster_placements(
+    projected: &[(NodeId, egui::Pos2, walkers::Position)],
+    can_zoom_in: bool,
+    snapshot: &DeviceSnapshot,
+) -> Vec<Placement> {
+    const MERGE_DIST: f32 = 26.0;
+    let n = projected.len();
+    let mut out: Vec<Placement> = Vec::new();
+    if n == 0 {
+        return out;
     }
     let mut assigned: Vec<bool> = vec![false; n];
 
     for start in 0..n {
-        match assigned.get(start) {
-            Some(true) | None => continue,
-            Some(false) => {}
+        if !matches!(assigned.get(start), Some(false)) {
+            continue;
         }
-        let Some(start_pos) = placements.get(start).map(|(_, p)| *p) else { continue };
-        let mut cluster: Vec<usize> = vec![start];
+        let Some(start_entry) = projected.get(start) else { continue };
+        let start_pos = start_entry.1;
+        let mut indices: Vec<usize> = vec![start];
         if let Some(slot) = assigned.get_mut(start) {
             *slot = true;
         }
         for j in start.saturating_add(1)..n {
-            if matches!(assigned.get(j), Some(true) | None) {
+            if !matches!(assigned.get(j), Some(false)) {
                 continue;
             }
-            let Some(p) = placements.get(j).map(|(_, p)| *p) else { continue };
-            if start_pos.distance(p) < MERGE_DIST {
-                cluster.push(j);
+            let Some(entry) = projected.get(j) else { continue };
+            if start_pos.distance(entry.1) < MERGE_DIST {
+                indices.push(j);
                 if let Some(slot) = assigned.get_mut(j) {
                     *slot = true;
                 }
             }
         }
-        if cluster.len() < 2 {
+
+        if indices.len() == 1 {
+            let is_self = start_entry.0 == snapshot.my_node;
+            let hops = snapshot.nodes.get(&start_entry.0).and_then(|n| n.hops_away);
+            out.push(Placement {
+                kind: Marker::Node(start_entry.0),
+                pos: start_pos,
+                radius: node_radius(is_self, hops),
+            });
             continue;
         }
-        // Stable seat assignment — sort cluster by NodeId so the same
-        // node lands on the same angle across frames.
-        cluster.sort_by_key(|i| placements.get(*i).map_or(0, |(id, _)| id.0));
+
+        indices.sort_by_key(|i| projected.get(*i).map_or(0, |e| e.0.0));
 
         let mut sum_x = 0.0_f32;
         let mut sum_y = 0.0_f32;
-        for &i in &cluster {
-            if let Some((_, p)) = placements.get(i) {
-                sum_x += p.x;
-                sum_y += p.y;
+        let mut sum_lat = 0.0_f64;
+        let mut sum_lon = 0.0_f64;
+        for &i in &indices {
+            if let Some(entry) = projected.get(i) {
+                sum_x += entry.1.x;
+                sum_y += entry.1.y;
+                sum_lat += entry.2.lat();
+                sum_lon += entry.2.lon();
             }
         }
-        let count_f = cluster.len() as f32;
+        let count_f = indices.len() as f32;
+        let count_f64 = indices.len() as f64;
         let cx = sum_x / count_f;
         let cy = sum_y / count_f;
-        let ring_r = (count_f * 4.5).max(16.0);
-        for (k, &i) in cluster.iter().enumerate() {
-            let theta = (k as f32 / count_f) * std::f32::consts::TAU;
-            if let Some(slot) = placements.get_mut(i) {
-                slot.1 = egui::pos2(
-                    ring_r.mul_add(theta.cos(), cx),
-                    ring_r.mul_add(theta.sin(), cy),
-                );
+
+        if can_zoom_in {
+            let centroid_latlon =
+                walkers::Position::from_lat_lon(sum_lat / count_f64, sum_lon / count_f64);
+            let members: Vec<NodeId> =
+                indices.iter().filter_map(|&i| projected.get(i).map(|e| e.0)).collect();
+            let count = members.len();
+            out.push(Placement {
+                kind: Marker::Cluster { members, centroid_latlon },
+                pos: egui::pos2(cx, cy),
+                radius: cluster_radius(count),
+            });
+        } else {
+            let ring_r = (count_f * 4.5).max(16.0);
+            for (k, &i) in indices.iter().enumerate() {
+                let Some(entry) = projected.get(i) else { continue };
+                let theta = (k as f32 / count_f) * std::f32::consts::TAU;
+                let is_self = entry.0 == snapshot.my_node;
+                let hops = snapshot.nodes.get(&entry.0).and_then(|n| n.hops_away);
+                out.push(Placement {
+                    kind: Marker::Node(entry.0),
+                    pos: egui::pos2(
+                        ring_r.mul_add(theta.cos(), cx),
+                        ring_r.mul_add(theta.sin(), cy),
+                    ),
+                    radius: node_radius(is_self, hops),
+                });
             }
         }
     }
+    out
+}
+
+fn cluster_radius(count: usize) -> f32 {
+    let c = count as f32;
+    c.sqrt().mul_add(3.5, 14.0)
+}
+
+fn draw_cluster(
+    painter: &egui::Painter,
+    pos: egui::Pos2,
+    radius: f32,
+    count: usize,
+    style: &egui::Style,
+) {
+    painter.circle_filled(
+        pos,
+        radius + 3.0,
+        egui::Color32::from_rgba_unmultiplied(120, 100, 210, 60),
+    );
+    painter.circle_filled(pos, radius, egui::Color32::from_rgb(110, 90, 200));
+    painter.circle_stroke(pos, radius, egui::Stroke::new(2.5, style.visuals.text_color()));
+    let font_size = (radius * 0.95).clamp(12.0, 20.0);
+    painter.text(
+        pos,
+        egui::Align2::CENTER_CENTER,
+        format!("{count}"),
+        egui::FontId::proportional(font_size),
+        egui::Color32::WHITE,
+    );
 }
 
 fn node_radius(is_self: bool, hops: Option<u8>) -> f32 {
@@ -708,6 +821,65 @@ fn handle_interaction(
     if response.clicked() {
         *detail_node = Some(id);
     }
+}
+
+fn handle_geo_interaction(
+    ui: &egui::Ui,
+    response: &egui::Response,
+    placements: &[Placement],
+    snapshot: &DeviceSnapshot,
+    detail_node: &mut Option<NodeId>,
+    pending_zoom: &mut Option<walkers::Position>,
+) {
+    let Some(pointer) = response.hover_pos() else { return };
+    let hit = placements
+        .iter()
+        .filter_map(|pl| {
+            let d = pl.pos.distance(pointer);
+            if d <= pl.radius + 4.0 { Some((pl, d)) } else { None }
+        })
+        .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(Ordering::Equal));
+    let Some((pl, _)) = hit else { return };
+
+    egui::show_tooltip_at_pointer(
+        ui.ctx(),
+        response.layer_id,
+        egui::Id::new("topology_tooltip"),
+        |ui| match &pl.kind {
+            Marker::Node(id) => render_tooltip(ui, *id, snapshot),
+            Marker::Cluster { members, .. } => render_cluster_tooltip(ui, members, snapshot),
+        },
+    );
+
+    if response.clicked() {
+        match &pl.kind {
+            Marker::Node(id) => *detail_node = Some(*id),
+            Marker::Cluster { centroid_latlon, .. } => {
+                *pending_zoom = Some(*centroid_latlon);
+            }
+        }
+    }
+}
+
+fn render_cluster_tooltip(ui: &mut egui::Ui, members: &[NodeId], snapshot: &DeviceSnapshot) {
+    ui.label(
+        egui::RichText::new(format!("{} nodes at this location", members.len())).strong(),
+    );
+    ui.separator();
+    let max_lines = 12;
+    for (i, id) in members.iter().enumerate() {
+        if i >= max_lines {
+            ui.weak(format!("… and {} more", members.len().saturating_sub(max_lines)));
+            break;
+        }
+        let name = snapshot
+            .nodes
+            .get(id)
+            .map_or_else(|| format!("!{:08x}", id.0), display_name);
+        ui.label(name);
+    }
+    ui.separator();
+    ui.weak("Click to zoom in");
 }
 
 fn render_tooltip(ui: &mut egui::Ui, id: NodeId, snapshot: &DeviceSnapshot) {
