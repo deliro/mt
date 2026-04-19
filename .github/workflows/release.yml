@@ -126,7 +126,6 @@ jobs:
   publish:
     name: publish to release
     runs-on: ubuntu-latest
-    if: github.event_name == 'push'
     needs: [build, macos-universal]
     steps:
       - uses: actions/download-artifact@v8
@@ -138,7 +137,9 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          TAG="${GITHUB_REF_NAME}"
+          # On push:tags the ref is `refs/tags/vX.Y.Z` so GITHUB_REF_NAME holds
+          # the tag. On workflow_dispatch we receive the tag through `inputs.tag`.
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
           echo "Uploading to release $TAG"
           cd artifacts
           ls -la
