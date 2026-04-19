@@ -524,14 +524,23 @@ impl eframe::App for App {
             egui::CentralPanel::default().show(ctx, |ui| {
                 connect::render(ui, &mut self.state, &self.cmd_tx);
             });
-            ctx.request_repaint_after(std::time::Duration::from_millis(100));
+            // While reconnect is scheduled we need a 1Hz tick to update the
+            // countdown banner and dispatch the next attempt at its deadline.
+            // Otherwise stay event-driven (events arrive via the mpsc bridge
+            // in main.rs which calls `request_repaint`).
+            if self.state.reconnect.attempt > 0 {
+                ctx.request_repaint_after(std::time::Duration::from_secs(1));
+            }
             return;
         }
         self.render_sidebar(ctx);
         self.render_active_tab(ctx);
         details::render_overlay(ctx, &mut self.state, &self.cmd_tx);
         remote_admin::render(ctx, &self.state.snapshot, &mut self.state.remote_admin, &self.cmd_tx);
-        ctx.request_repaint_after(std::time::Duration::from_millis(100));
+        // Status bar shows the "link Ns" elapsed counter — refresh at 1Hz so
+        // that label and its colour stay accurate. Other UI updates are
+        // event-driven via the mpsc → request_repaint bridge.
+        ctx.request_repaint_after(std::time::Duration::from_secs(1));
     }
 }
 

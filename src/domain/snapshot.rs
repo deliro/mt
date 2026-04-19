@@ -12,6 +12,11 @@ use crate::domain::message::TextMessage;
 use crate::domain::node::Node;
 use crate::domain::stats::MeshStats;
 
+/// Hard cap on in-memory chat messages. Older entries are evicted from the
+/// front of the buffer when this limit is exceeded. The full history still
+/// lives in `SQLite` via `HistoryStore` — this only bounds RSS.
+const MAX_MESSAGES: usize = 5_000;
+
 #[derive(Clone, Debug, Default)]
 pub struct DeviceSnapshot {
     pub my_node: NodeId,
@@ -62,5 +67,9 @@ impl DeviceSnapshot {
             return;
         }
         self.messages.push(msg);
+        let drop = self.messages.len().saturating_sub(MAX_MESSAGES);
+        if drop > 0 {
+            self.messages.drain(0..drop);
+        }
     }
 }

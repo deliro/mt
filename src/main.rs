@@ -1,6 +1,6 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use eframe::NativeOptions;
 use futures::FutureExt;
@@ -54,7 +54,26 @@ fn main() -> eframe::Result<()> {
     };
 
     let (cmd_tx, cmd_rx) = mpsc::unbounded_channel::<Command>();
+    // Session writes events to `raw_ev_tx`; the forwarder below pushes them to
+    // `ev_tx` (read by the App) and wakes the egui run-loop. This way the UI
+    // sleeps until something actually happens — no idle 10Hz repaint.
+    let (raw_ev_tx, mut raw_ev_rx) = mpsc::channel::<Event>(256);
     let (ev_tx, ev_rx) = mpsc::channel::<Event>(256);
+    let ctx_holder: Arc<OnceLock<eframe::egui::Context>> = Arc::new(OnceLock::new());
+
+    {
+        let ctx_holder = ctx_holder.clone();
+        runtime.spawn(async move {
+            while let Some(ev) = raw_ev_rx.recv().await {
+                if ev_tx.send(ev).await.is_err() {
+                    break;
+                }
+                if let Some(ctx) = ctx_holder.get() {
+                    ctx.request_repaint();
+                }
+            }
+        });
+    }
 
     let rt_for_session = runtime.clone();
     std::thread::spawn(move || {
@@ -77,7 +96,7 @@ fn main() -> eframe::Result<()> {
             }
             .boxed()
         }));
-        rt_for_session.block_on(session.run(cmd_rx, ev_tx));
+        rt_for_session.block_on(session.run(cmd_rx, raw_ev_tx));
     });
 
     let _guard = runtime.enter();
@@ -86,6 +105,7 @@ fn main() -> eframe::Result<()> {
         NativeOptions::default(),
         Box::new(move |cc| {
             mt::ui::install_fonts(&cc.egui_ctx);
+            let _ = ctx_holder.set(cc.egui_ctx.clone());
             Ok(Box::new(App::new(
                 profiles,
                 last_active_key,

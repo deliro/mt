@@ -15,7 +15,10 @@ use tracing::{error, warn};
 use walkers::sources::{Attribution, OpenStreetMap, TileSource};
 use walkers::{Texture, TextureWithUv, TileId, Tiles};
 
-const MEMORY_CAPACITY: usize = 512;
+/// Decoded GPU textures held in RAM. Each tile is 256×256 RGBA ≈ 256KB, so
+/// 128 tiles ≈ 32MB resident. SQLite-cached bytes outside this LRU are still
+/// available, just need a re-decode on cache miss.
+const MEMORY_CAPACITY: usize = 128;
 const HTTP_TIMEOUT: Duration = Duration::from_secs(15);
 const USER_AGENT: &str = concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION"));
 /// Max concurrent HTTP fetches. OSM usage policy discourages massive
