@@ -43,8 +43,6 @@ impl Default for TopologyUi {
     }
 }
 
-const NODE_R: f32 = 9.0;
-const SELF_R: f32 = 12.0;
 const HIT_R: f32 = 16.0;
 
 pub fn render(
@@ -535,10 +533,21 @@ fn draw_node(
     style: &egui::Style,
 ) {
     let node = snapshot.nodes.get(&id);
-    let fill = node_color(is_self, node.and_then(|n| n.hops_away));
-    let r = if is_self { SELF_R } else { NODE_R };
+    let hops = node.and_then(|n| n.hops_away);
+    let fill = node_color(is_self, hops);
+    let r = node_radius(is_self, hops);
     painter.circle_filled(pos, r, fill);
     painter.circle_stroke(pos, r, egui::Stroke::new(1.0, style.visuals.text_color()));
+    if !is_self {
+        let badge = hop_badge(hops);
+        painter.text(
+            pos,
+            egui::Align2::CENTER_CENTER,
+            badge,
+            egui::FontId::monospace((r * 1.1).clamp(9.0, 13.0)),
+            egui::Color32::BLACK,
+        );
+    }
     let label = node.map_or_else(|| format!("!{:08x}", id.0), short_label);
     painter.text(
         egui::pos2(pos.x, pos.y + r + 10.0),
@@ -547,6 +556,27 @@ fn draw_node(
         egui::FontId::monospace(11.0),
         style.visuals.text_color(),
     );
+}
+
+fn node_radius(is_self: bool, hops: Option<u8>) -> f32 {
+    if is_self {
+        return 14.0;
+    }
+    match hops {
+        Some(0) => 11.5,
+        Some(1) => 10.0,
+        Some(2) => 8.5,
+        Some(_) => 7.5,
+        None => 7.0,
+    }
+}
+
+fn hop_badge(hops: Option<u8>) -> String {
+    match hops {
+        Some(n) if n < 10 => n.to_string(),
+        Some(_) => "9+".into(),
+        None => "?".into(),
+    }
 }
 
 fn legend_signal(
