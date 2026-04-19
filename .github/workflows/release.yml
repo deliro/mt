@@ -98,11 +98,11 @@ jobs:
     runs-on: macos-14
     needs: build
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: mt-aarch64-apple-darwin
           path: arm
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: mt-x86_64-apple-darwin
           path: intel
@@ -129,7 +129,7 @@ jobs:
     if: github.event_name == 'push'
     needs: [build, macos-universal]
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: artifacts
           merge-multiple: true
