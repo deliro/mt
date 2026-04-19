@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -21,6 +22,10 @@ const USER_AGENT: &str = concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VE
 /// parallelism from a single client; 8 is comfortable and matches what
 /// modern browsers do per origin.
 const MAX_PARALLEL: usize = 8;
+/// Upper bound on queued-but-not-yet-fetched requests. Kept large
+/// enough that normal panning / zooming won't hit it; when it does,
+/// the least-recently-queued entry is dropped.
+const MAX_PENDING: usize = 1024;
 const UV_UNIT: egui::Rect =
     egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
 /// OSM serves tiles up to zoom 19. Walkers' internal zoom cap is 26,
@@ -157,63 +162,144 @@ fn run_loop(
     rt.block_on(async move {
         let (http_tx, mut http_rx) = mpsc::unbounded_channel::<(TileId, Vec<u8>)>();
         let sem = Arc::new(Semaphore::new(MAX_PARALLEL));
+        let mut pending: VecDeque<TileId> = VecDeque::new();
+        let mut observed_zoom: u8 = 0;
 
         loop {
+            drain_pending(&sem, &mut pending, observed_zoom, &client, &http_tx);
             tokio::select! {
                 req = request_rx.recv() => {
                     let Some(tile_id) = req else { break };
-                    let hit = conn.as_ref().and_then(|c| match load_bytes(c, tile_id) {
-                        Ok(opt) => opt,
-                        Err(e) => {
-                            warn!(?tile_id, %e, "tile select failed");
-                            None
-                        }
-                    });
-                    if let Some(bytes) = hit {
-                        match decode(&bytes) {
-                            Ok(image) => {
-                                if tile_tx.send((tile_id, image)).is_err() {
-                                    break;
-                                }
-                                ctx.request_repaint();
-                            }
-                            Err(e) => warn!(?tile_id, %e, "tile decode failed"),
-                        }
-                    } else {
-                        let sem = sem.clone();
-                        let client = client.clone();
-                        let http_tx = http_tx.clone();
-                        tokio::spawn(async move {
-                            let Ok(_permit) = sem.acquire_owned().await else { return };
-                            match fetch(&client, tile_id).await {
-                                Ok(bytes) => {
-                                    let _ = http_tx.send((tile_id, bytes));
-                                }
-                                Err(e) => warn!(?tile_id, %e, "tile fetch failed"),
-                            }
-                        });
+                    observed_zoom = tile_id.zoom;
+                    if !handle_request(
+                        tile_id, conn.as_ref(), &tile_tx, &ctx, &mut pending,
+                    ) {
+                        break;
                     }
                 }
                 Some((tile_id, bytes)) = http_rx.recv() => {
-                    if let Some(c) = conn.as_ref()
-                        && let Err(e) = save_bytes(c, tile_id, &bytes)
-                    {
-                        warn!(?tile_id, %e, "tile insert failed");
-                    }
-                    match decode(&bytes) {
-                        Ok(image) => {
-                            if tile_tx.send((tile_id, image)).is_err() {
-                                break;
-                            }
-                            ctx.request_repaint();
-                        }
-                        Err(e) => warn!(?tile_id, %e, "tile decode failed"),
+                    if !handle_fetched(
+                        tile_id, &bytes, conn.as_ref(), &tile_tx, &ctx,
+                    ) {
+                        break;
                     }
                 }
                 else => break,
             }
         }
     });
+}
+
+/// Spawn as many HTTP fetches as the semaphore allows, picking the
+/// pending request whose zoom is closest to the user's latest observed
+/// zoom. Far-zoom (stale) entries stay in the queue and are served
+/// only after the relevant ones drain.
+fn drain_pending(
+    sem: &Arc<Semaphore>,
+    pending: &mut VecDeque<TileId>,
+    observed_zoom: u8,
+    client: &reqwest::Client,
+    http_tx: &mpsc::UnboundedSender<(TileId, Vec<u8>)>,
+) {
+    while !pending.is_empty() {
+        let Ok(permit) = Arc::clone(sem).try_acquire_owned() else { break };
+        let Some(idx) = pick_priority(pending, observed_zoom) else {
+            drop(permit);
+            break;
+        };
+        let Some(tile_id) = pending.remove(idx) else {
+            drop(permit);
+            break;
+        };
+        let client = client.clone();
+        let http_tx = http_tx.clone();
+        tokio::spawn(async move {
+            let _permit = permit;
+            match fetch(&client, tile_id).await {
+                Ok(bytes) => {
+                    let _ = http_tx.send((tile_id, bytes));
+                }
+                Err(e) => warn!(?tile_id, %e, "tile fetch failed"),
+            }
+        });
+    }
+}
+
+/// Returns `false` if the UI end of `tile_tx` closed (time to shut
+/// down the worker).
+fn handle_request(
+    tile_id: TileId,
+    conn: Option<&Connection>,
+    tile_tx: &mpsc::UnboundedSender<(TileId, ColorImage)>,
+    ctx: &egui::Context,
+    pending: &mut VecDeque<TileId>,
+) -> bool {
+    let hit = conn.and_then(|c| match load_bytes(c, tile_id) {
+        Ok(opt) => opt,
+        Err(e) => {
+            warn!(?tile_id, %e, "tile select failed");
+            None
+        }
+    });
+    if let Some(bytes) = hit {
+        return deliver_tile(tile_id, &bytes, tile_tx, ctx);
+    }
+    pending.push_back(tile_id);
+    while pending.len() > MAX_PENDING {
+        let _ = pending.pop_front();
+    }
+    true
+}
+
+fn handle_fetched(
+    tile_id: TileId,
+    bytes: &[u8],
+    conn: Option<&Connection>,
+    tile_tx: &mpsc::UnboundedSender<(TileId, ColorImage)>,
+    ctx: &egui::Context,
+) -> bool {
+    if let Some(c) = conn
+        && let Err(e) = save_bytes(c, tile_id, bytes)
+    {
+        warn!(?tile_id, %e, "tile insert failed");
+    }
+    deliver_tile(tile_id, bytes, tile_tx, ctx)
+}
+
+fn deliver_tile(
+    tile_id: TileId,
+    bytes: &[u8],
+    tile_tx: &mpsc::UnboundedSender<(TileId, ColorImage)>,
+    ctx: &egui::Context,
+) -> bool {
+    match decode(bytes) {
+        Ok(image) => {
+            if tile_tx.send((tile_id, image)).is_err() {
+                return false;
+            }
+            ctx.request_repaint();
+            true
+        }
+        Err(e) => {
+            warn!(?tile_id, %e, "tile decode failed");
+            true
+        }
+    }
+}
+
+/// Pick the pending request whose zoom is closest to the user's
+/// current zoom. Ties broken toward the most recently queued entry
+/// so fresh requests surface over stale ones at the same level.
+fn pick_priority(pending: &VecDeque<TileId>, observed_zoom: u8) -> Option<usize> {
+    pending
+        .iter()
+        .enumerate()
+        .min_by(|(ia, ta), (ib, tb)| {
+            let da = ta.zoom.abs_diff(observed_zoom);
+            let db = tb.zoom.abs_diff(observed_zoom);
+            da.cmp(&db).then_with(|| ib.cmp(ia))
+        })
+        .map(|(i, _)| i)
 }
 
 async fn fetch(client: &reqwest::Client, tile_id: TileId) -> Result<Vec<u8>, TileError> {
