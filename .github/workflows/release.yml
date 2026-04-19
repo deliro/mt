@@ -216,5 +216,5 @@ jobs:
           # All archives at the top level after merge-multiple.
           for f in *.tar.gz *.zip *.AppImage *.exe; do
             [ -e "$f" ] || continue
-            gh release upload "$TAG" "$f" --clobber
+            gh release upload "$TAG" "$f" --clobber --repo "${{ github.repository }}"
           done
