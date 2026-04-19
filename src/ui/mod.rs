@@ -13,6 +13,7 @@ pub mod remote_admin;
 pub mod scan;
 pub mod settings;
 pub mod status;
+pub mod topology;
 
 pub use fonts::install_fonts;
 
@@ -56,6 +57,7 @@ pub struct AppState {
     pub channels_ui: channels::ChannelsUi,
     pub inspector_ui: inspector::InspectorUi,
     pub logs_ui: logs::LogsUi,
+    pub topology_ui: topology::TopologyUi,
     pub alerts: alerts::AlertConfig,
     pub alerts_runtime: alerts::AlertRuntime,
     pub alerts_dirty: bool,
@@ -98,6 +100,7 @@ pub enum Tab {
     Settings,
     Inspector,
     Logs,
+    Topology,
 }
 
 pub struct App {
@@ -269,7 +272,7 @@ impl App {
                     Tab::Nodes => self.state.nodes_ui.search.clear(),
                     Tab::Inspector => self.state.inspector_ui.filter.clear(),
                     Tab::Logs => self.state.logs_ui.filter.clear(),
-                    Tab::Channels | Tab::Settings => {}
+                    Tab::Channels | Tab::Settings | Tab::Topology => {}
                 }
             }
         }
@@ -634,6 +637,7 @@ impl App {
             ui.selectable_value(&mut self.state.active_tab, Tab::Settings, "Settings");
             ui.selectable_value(&mut self.state.active_tab, Tab::Inspector, "Inspector");
             ui.selectable_value(&mut self.state.active_tab, Tab::Logs, "Logs");
+            ui.selectable_value(&mut self.state.active_tab, Tab::Topology, "Topology");
         });
     }
 
@@ -698,6 +702,17 @@ impl App {
             Tab::Logs => {
                 egui::CentralPanel::default().show(ctx, |ui| {
                     logs::render(ui, &mut self.state.logs_ui);
+                });
+            }
+            Tab::Topology => {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    let AppState {
+                        snapshot,
+                        topology_ui,
+                        detail_node,
+                        ..
+                    } = &mut self.state;
+                    topology::render(ui, snapshot, topology_ui, detail_node);
                 });
             }
         }
