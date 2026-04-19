@@ -151,8 +151,12 @@ jobs:
             --desktop-file AppDir/mt.desktop \
             --icon-file AppDir/mt.png \
             --output appimage
+          # linuxdeploy names the file `<Name>-<arch>.AppImage` from the
+          # desktop entry; rename to a stable artifact name regardless.
+          built=$(find . -maxdepth 1 -type f -name "*.AppImage" ! -name "linuxdeploy*" -print -quit)
+          [ -n "$built" ] || { echo "AppImage not produced" >&2; ls -la; exit 1; }
           mkdir -p dist
-          mv mt-*.AppImage "dist/mt-x86_64.AppImage"
+          mv "$built" "dist/mt-x86_64.AppImage"
       - uses: actions/upload-artifact@v7
         with:
           name: mt-x86_64.AppImage
