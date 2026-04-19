@@ -18,6 +18,10 @@ const HTTP_TIMEOUT: Duration = Duration::from_secs(15);
 const USER_AGENT: &str = concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION"));
 const UV_UNIT: egui::Rect =
     egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
+/// OSM serves tiles up to zoom 19. Walkers' internal zoom cap is 26,
+/// so requests at zoom 20+ reach us and must be dropped before we try
+/// to fetch them.
+pub const OSM_MAX_ZOOM: u8 = 19;
 
 /// `walkers::Tiles` implementation that caches raw tile bytes in the
 /// application's `SQLite` DB (same file as the rest of `HistoryStore`).
@@ -73,6 +77,10 @@ impl Tiles for SqliteTiles {
         while let Ok((id, image)) = self.tile_rx.try_recv() {
             let texture = Texture::from_color_image(image, &self.ctx);
             let _ = self.memory.put(id, Some(texture));
+        }
+
+        if tile_id.zoom > OSM_MAX_ZOOM {
+            return None;
         }
 
         if let Some(slot) = self.memory.get(&tile_id) {

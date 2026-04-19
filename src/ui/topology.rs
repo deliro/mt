@@ -217,11 +217,17 @@ fn render_geographic_plane(
         let _ = state.map_memory.set_zoom(new_zoom);
         ui.ctx().request_repaint();
     }
+    // Walkers' internal zoom cap is 26, OSM only serves up to 19.
+    // Clamp here so the user's scroll gesture doesn't push us into
+    // zoom levels where every tile request 400s.
+    if state.map_memory.zoom() > MAX_ZOOM {
+        let _ = state.map_memory.set_zoom(MAX_ZOOM);
+    }
 
     draw_attribution(ui, response.rect, state.map_tiles.as_ref());
 }
 
-const MAX_ZOOM: f64 = 19.0;
+const MAX_ZOOM: f64 = crate::ui::map_tiles::OSM_MAX_ZOOM as f64;
 
 fn my_node_position(snapshot: &DeviceSnapshot) -> Option<walkers::Position> {
     snapshot
