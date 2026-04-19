@@ -1,4 +1,5 @@
 use std::cmp::Ordering;
+use std::collections::HashMap;
 use std::time::SystemTime;
 
 use eframe::egui;
@@ -18,11 +19,19 @@ pub struct TopologyUi {
     pub view: ViewKind,
     pub geo_pan: egui::Vec2,
     pub geo_zoom: f32,
+    pub signal_pan: egui::Vec2,
+    pub signal_zoom: f32,
 }
 
 impl Default for TopologyUi {
     fn default() -> Self {
-        Self { view: ViewKind::Signal, geo_pan: egui::Vec2::ZERO, geo_zoom: 1.0 }
+        Self {
+            view: ViewKind::Signal,
+            geo_pan: egui::Vec2::ZERO,
+            geo_zoom: 1.0,
+            signal_pan: egui::Vec2::ZERO,
+            signal_zoom: 1.0,
+        }
     }
 }
 
@@ -39,7 +48,7 @@ pub fn render(
     toolbar(ui, state, snapshot);
     ui.separator();
     match state.view {
-        ViewKind::Signal => render_signal(ui, snapshot, detail_node),
+        ViewKind::Signal => render_signal(ui, snapshot, state, detail_node),
         ViewKind::Geographic => render_geographic(ui, snapshot, state, detail_node),
     }
 }
@@ -52,34 +61,66 @@ fn toolbar(ui: &mut egui::Ui, state: &mut TopologyUi, snapshot: &DeviceSnapshot)
         let total = snapshot.nodes.len();
         let with_gps = snapshot.nodes.values().filter(|n| n.position.is_some()).count();
         ui.weak(format!("{total} nodes · {with_gps} with GPS"));
-        if state.view == ViewKind::Geographic {
-            ui.separator();
-            if ui.small_button("Reset view").clicked() {
-                state.geo_pan = egui::Vec2::ZERO;
-                state.geo_zoom = 1.0;
+        ui.separator();
+        if ui.small_button("Reset view").clicked() {
+            match state.view {
+                ViewKind::Signal => {
+                    state.signal_pan = egui::Vec2::ZERO;
+                    state.signal_zoom = 1.0;
+                }
+                ViewKind::Geographic => {
+                    state.geo_pan = egui::Vec2::ZERO;
+                    state.geo_zoom = 1.0;
+                }
             }
-            ui.weak(format!("zoom {:.1}×", state.geo_zoom));
         }
+        let zoom = match state.view {
+            ViewKind::Signal => state.signal_zoom,
+            ViewKind::Geographic => state.geo_zoom,
+        };
+        ui.weak(format!("zoom {zoom:.1}×"));
+        ui.weak("· scroll to zoom · drag to pan");
     });
 }
 
 fn render_signal(
     ui: &mut egui::Ui,
     snapshot: &DeviceSnapshot,
+    state: &mut TopologyUi,
     detail_node: &mut Option<NodeId>,
 ) {
     let available = ui.available_size();
-    let (response, painter) = ui.allocate_painter(available, egui::Sense::click());
+    let (response, painter) = ui.allocate_painter(available, egui::Sense::click_and_drag());
     let rect = response.rect;
     painter.rect_filled(rect, 0.0, ui.style().visuals.extreme_bg_color);
 
-    let center = rect.center();
-    let max_r = rect.width().min(rect.height()) * 0.45;
-    let ring_step = max_r / 4.0;
+    if response.dragged() {
+        let delta = response.drag_delta();
+        state.signal_pan = egui::vec2(
+            state.signal_pan.x + delta.x,
+            state.signal_pan.y + delta.y,
+        );
+    }
+    if response.hovered() {
+        let scroll = ui.input(|i| i.smooth_scroll_delta.y);
+        if scroll.abs() > f32::EPSILON {
+            let factor = (scroll * 0.005).exp();
+            state.signal_zoom = (state.signal_zoom * factor).clamp(0.25, 20.0);
+        }
+    }
 
+    let center = egui::pos2(
+        rect.center().x + state.signal_pan.x,
+        rect.center().y + state.signal_pan.y,
+    );
     let rings = group_by_ring(snapshot);
-    let ring_stroke = egui::Stroke::new(1.0, ui.style().visuals.weak_text_color().gamma_multiply(0.5));
-    for idx in 1_u32..=4 {
+    let total_rings = ring_count(&rings).max(1);
+    let base_max_r = rect.width().min(rect.height()) * 0.45;
+    let ring_step = base_max_r * state.signal_zoom / total_rings as f32;
+
+    let ring_stroke =
+        egui::Stroke::new(1.0, ui.style().visuals.weak_text_color().gamma_multiply(0.5));
+    for idx in 1..=total_rings {
         let r = ring_step * idx as f32;
         painter.circle_stroke(center, r, ring_stroke);
     }
@@ -99,7 +140,7 @@ fn render_signal(
         draw_node(&painter, placed.pos, placed.id, snapshot, false, ui.style());
     }
 
-    legend_signal(&painter, rect, ui.style());
+    legend_signal(&painter, rect, ui.style(), &rings);
 
     let hit_points = collect_hit_points(snapshot.my_node, center, &placements);
     handle_interaction(ui, &response, &hit_points, snapshot, detail_node);
@@ -234,27 +275,49 @@ fn render_no_gps(
 
 // ————— pure helpers —————
 
-/// Four buckets: [hops=0, hops=1, hops≥2, unknown]. `my_node` excluded.
-fn group_by_ring(snapshot: &DeviceSnapshot) -> [Vec<NodeId>; 4] {
-    let mut rings: [Vec<NodeId>; 4] = Default::default();
+/// Per-hop ring buckets: `known[h]` = nodes with `hops_away = h`. `my_node` excluded.
+/// `unknown` collects nodes whose `hops_away` is `None`.
+struct RingGrouping {
+    known: Vec<Vec<NodeId>>,
+    unknown: Vec<NodeId>,
+}
+
+fn group_by_ring(snapshot: &DeviceSnapshot) -> RingGrouping {
+    let mut max_hops: Option<u8> = None;
+    let mut unknown: Vec<NodeId> = Vec::new();
+    let mut by_hops: HashMap<u8, Vec<NodeId>> = HashMap::new();
     for (id, n) in &snapshot.nodes {
         if *id == snapshot.my_node {
             continue;
         }
-        let bucket = match n.hops_away {
-            Some(0) => 0_usize,
-            Some(1) => 1,
-            Some(_) => 2,
-            None => 3,
-        };
-        if let Some(ring) = rings.get_mut(bucket) {
-            ring.push(*id);
+        match n.hops_away {
+            Some(h) => {
+                max_hops = Some(max_hops.map_or(h, |m| m.max(h)));
+                by_hops.entry(h).or_default().push(*id);
+            }
+            None => unknown.push(*id),
         }
     }
-    for ring in &mut rings {
-        ring.sort_by_key(|id| id.0);
-    }
-    rings
+    let known = max_hops.map_or_else(Vec::new, |max_h| {
+        let len = usize::from(max_h).saturating_add(1);
+        let mut rings: Vec<Vec<NodeId>> = vec![Vec::new(); len];
+        for (h, ids) in by_hops {
+            if let Some(slot) = rings.get_mut(usize::from(h)) {
+                *slot = ids;
+            }
+        }
+        for ring in &mut rings {
+            ring.sort_by_key(|id| id.0);
+        }
+        rings
+    });
+    unknown.sort_by_key(|id| id.0);
+    RingGrouping { known, unknown }
+}
+
+fn ring_count(rings: &RingGrouping) -> usize {
+    let unknown_extra = usize::from(!rings.unknown.is_empty());
+    rings.known.len().saturating_add(unknown_extra)
 }
 
 struct SignalPlacement {
@@ -264,25 +327,43 @@ struct SignalPlacement {
 }
 
 fn layout_signal(
-    rings: &[Vec<NodeId>; 4],
+    rings: &RingGrouping,
     center: egui::Pos2,
     ring_step: f32,
 ) -> Vec<SignalPlacement> {
     let mut out = Vec::new();
-    for (ring_idx, ids) in rings.iter().enumerate() {
-        let count = ids.len().max(1) as f32;
-        let radius = ring_step * (ring_idx as f32 + 1.0);
-        let phase = if ring_idx % 2 == 0 { 0.0 } else { std::f32::consts::PI / count };
-        for (i, id) in ids.iter().enumerate() {
-            let theta = (i as f32 / count).mul_add(std::f32::consts::TAU, phase);
-            let pos = egui::pos2(
-                center.x + radius * theta.cos(),
-                center.y + radius * theta.sin(),
-            );
-            out.push(SignalPlacement { id: *id, pos, direct_neighbor: ring_idx == 0 });
+    for (hops_idx, ids) in rings.known.iter().enumerate() {
+        if ids.is_empty() {
+            continue;
         }
+        place_ring(&mut out, ids, hops_idx, center, ring_step, hops_idx == 0);
+    }
+    if !rings.unknown.is_empty() {
+        let ring_idx = rings.known.len();
+        place_ring(&mut out, &rings.unknown, ring_idx, center, ring_step, false);
     }
     out
+}
+
+fn place_ring(
+    out: &mut Vec<SignalPlacement>,
+    ids: &[NodeId],
+    ring_idx: usize,
+    center: egui::Pos2,
+    ring_step: f32,
+    direct_neighbor: bool,
+) {
+    let count = (ids.len().max(1)) as f32;
+    let radius = ring_step * (ring_idx as f32 + 1.0);
+    let phase = if ring_idx.is_multiple_of(2) { 0.0 } else { std::f32::consts::PI / count };
+    for (i, id) in ids.iter().enumerate() {
+        let theta = (i as f32 / count).mul_add(std::f32::consts::TAU, phase);
+        let pos = egui::pos2(
+            center.x + radius * theta.cos(),
+            center.y + radius * theta.sin(),
+        );
+        out.push(SignalPlacement { id: *id, pos, direct_neighbor });
+    }
 }
 
 fn collect_hit_points(
@@ -457,14 +538,36 @@ fn draw_node(
     );
 }
 
-fn legend_signal(painter: &egui::Painter, rect: egui::Rect, style: &egui::Style) {
-    let lines = ["ring 1: hops=0", "ring 2: hops=1", "ring 3: hops≥2", "ring 4: unknown"];
+fn legend_signal(
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    style: &egui::Style,
+    rings: &RingGrouping,
+) {
     let color = style.visuals.weak_text_color();
+    let mut lines: Vec<String> = Vec::new();
+    for (hops_idx, ids) in rings.known.iter().enumerate() {
+        if ids.is_empty() {
+            continue;
+        }
+        let ring_num = hops_idx.saturating_add(1);
+        lines.push(format!("ring {ring_num}: hops={hops_idx} · {} node(s)", ids.len()));
+    }
+    if !rings.unknown.is_empty() {
+        let ring_num = rings.known.len().saturating_add(1);
+        lines.push(format!(
+            "ring {ring_num}: unknown · {} node(s)",
+            rings.unknown.len()
+        ));
+    }
+    if lines.is_empty() {
+        return;
+    }
     for (i, line) in lines.iter().enumerate() {
         painter.text(
             egui::pos2(rect.left() + 12.0, (i as f32).mul_add(14.0, rect.top() + 10.0)),
             egui::Align2::LEFT_TOP,
-            *line,
+            line,
             egui::FontId::monospace(10.0),
             color,
         );
