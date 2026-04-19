@@ -1,0 +1,116 @@
+name: homebrew tap
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to publish (e.g. v0.2.0)"
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  bump:
+    name: bump formula
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve tag
+        id: t
+        env:
+          INPUT_TAG: ${{ github.event.inputs.tag }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          TAG="${INPUT_TAG:-$RELEASE_TAG}"
+          if [ -z "$TAG" ]; then
+            echo "No tag resolved" >&2; exit 1
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Download release archives
+        env:
+          TAG: ${{ steps.t.outputs.tag }}
+        run: |
+          set -euo pipefail
+          base="https://github.com/deliro/mt/releases/download/${TAG}"
+          for f in mt-aarch64-apple-darwin.tar.gz mt-x86_64-apple-darwin.tar.gz mt-x86_64-unknown-linux-gnu.tar.gz; do
+            curl -fsSL -o "$f" "${base}/${f}"
+          done
+
+      - name: Compute SHA256
+        id: sha
+        run: |
+          set -euo pipefail
+          {
+            echo "arm_macos=$(sha256sum mt-aarch64-apple-darwin.tar.gz | awk '{print $1}')"
+            echo "intel_macos=$(sha256sum mt-x86_64-apple-darwin.tar.gz | awk '{print $1}')"
+            echo "linux=$(sha256sum mt-x86_64-unknown-linux-gnu.tar.gz | awk '{print $1}')"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Render formula
+        env:
+          TAG: ${{ steps.t.outputs.tag }}
+          VERSION: ${{ steps.t.outputs.version }}
+          ARM: ${{ steps.sha.outputs.arm_macos }}
+          INTEL: ${{ steps.sha.outputs.intel_macos }}
+          LINUX: ${{ steps.sha.outputs.linux }}
+        run: |
+          set -euo pipefail
+          base="https://github.com/deliro/mt/releases/download/${TAG}"
+          mkdir -p out/Formula
+          cat > out/Formula/mt.rb <<RUBY
+          class Mt < Formula
+            desc "Native desktop client for Meshtastic radios (BLE / Serial / TCP)"
+            homepage "https://github.com/deliro/mt"
+            version "${VERSION}"
+            license any_of: ["Apache-2.0", "MIT"]
+
+            on_macos do
+              on_arm do
+                url "${base}/mt-aarch64-apple-darwin.tar.gz"
+                sha256 "${ARM}"
+              end
+              on_intel do
+                url "${base}/mt-x86_64-apple-darwin.tar.gz"
+                sha256 "${INTEL}"
+              end
+            end
+
+            on_linux do
+              url "${base}/mt-x86_64-unknown-linux-gnu.tar.gz"
+              sha256 "${LINUX}"
+            end
+
+            def install
+              bin.install "mt"
+            end
+
+            test do
+              system "#{bin}/mt", "--help"
+            end
+          end
+          RUBY
+          cat out/Formula/mt.rb
+
+      - name: Push to homebrew-tap
+        env:
+          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          TAG: ${{ steps.t.outputs.tag }}
+        run: |
+          set -euo pipefail
+          git clone "https://x-access-token:${GH_TOKEN}@github.com/deliro/homebrew-tap" tap
+          mkdir -p tap/Formula
+          cp out/Formula/mt.rb tap/Formula/mt.rb
+          cd tap
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
+          if git diff --quiet; then
+            echo "Formula unchanged"
+            exit 0
+          fi
+          git add Formula/mt.rb
+          git commit -m "mt ${TAG}"
+          git push

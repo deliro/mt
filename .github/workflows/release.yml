@@ -93,6 +93,72 @@ jobs:
           path: dist/mt-${{ matrix.target }}.${{ matrix.archive_ext }}
           if-no-files-found: error
 
+      # winget prefers a raw portable .exe over a zip-with-nested-exe.
+      # Publish it alongside the zip for the windows target.
+      - name: Stage windows portable exe
+        if: matrix.target == 'x86_64-pc-windows-msvc'
+        shell: bash
+        run: cp "target/${{ matrix.target }}/release/${{ matrix.artifact }}" "dist/mt-${{ matrix.target }}.exe"
+
+      - name: Upload windows portable exe
+        if: matrix.target == 'x86_64-pc-windows-msvc'
+        uses: actions/upload-artifact@v7
+        with:
+          name: mt-${{ matrix.target }}-exe
+          path: dist/mt-${{ matrix.target }}.exe
+          if-no-files-found: error
+
+  linux-appimage:
+    name: linux appimage
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: mt-x86_64-unknown-linux-gnu
+          path: incoming
+      - name: Install fuse for AppImage runtime
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libfuse2 imagemagick
+      - name: Build AppImage
+        shell: bash
+        run: |
+          set -euo pipefail
+          tar -xzf incoming/mt-x86_64-unknown-linux-gnu.tar.gz -C incoming
+          mkdir -p AppDir/usr/bin
+          install -m755 incoming/mt AppDir/usr/bin/mt
+          cat > AppDir/mt.desktop <<'EOF'
+          [Desktop Entry]
+          Type=Application
+          Name=Meshtastic
+          Comment=Native desktop client for Meshtastic radios (BLE / Serial / TCP)
+          Exec=mt
+          Icon=mt
+          Categories=Network;HamRadio;
+          Terminal=false
+          EOF
+          # 256x256 transparent PNG placeholder. Drop an `assets/icon.png`
+          # into the repo and we'll prefer that.
+          if [ -f assets/icon.png ]; then
+            cp assets/icon.png AppDir/mt.png
+          else
+            convert -size 256x256 xc:transparent AppDir/mt.png
+          fi
+          curl -fsSL -o linuxdeploy.AppImage \
+            https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
+          chmod +x linuxdeploy.AppImage
+          ./linuxdeploy.AppImage \
+            --appdir AppDir \
+            --desktop-file AppDir/mt.desktop \
+            --icon-file AppDir/mt.png \
+            --output appimage
+          mkdir -p dist
+          mv mt-*.AppImage "dist/mt-x86_64.AppImage"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: mt-x86_64.AppImage
+          path: dist/mt-x86_64.AppImage
+          if-no-files-found: error
+
   macos-universal:
     name: macos universal
     runs-on: macos-14
@@ -126,7 +192,7 @@ jobs:
   publish:
     name: publish to release
     runs-on: ubuntu-latest
-    needs: [build, macos-universal]
+    needs: [build, linux-appimage, macos-universal]
     steps:
       - uses: actions/download-artifact@v8
         with:
@@ -144,7 +210,7 @@ jobs:
           cd artifacts
           ls -la
           # All archives at the top level after merge-multiple.
-          for f in *.tar.gz *.zip; do
+          for f in *.tar.gz *.zip *.AppImage *.exe; do
             [ -e "$f" ] || continue
             gh release upload "$TAG" "$f" --clobber
           done

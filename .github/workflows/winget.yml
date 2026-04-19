@@ -1,0 +1,39 @@
+name: winget submission
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to publish (e.g. v0.2.0)"
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  submit:
+    name: submit to winget-pkgs
+    runs-on: windows-latest
+    steps:
+      - name: Resolve tag
+        id: t
+        shell: bash
+        env:
+          INPUT_TAG: ${{ github.event.inputs.tag }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          TAG="${INPUT_TAG:-$RELEASE_TAG}"
+          if [ -z "$TAG" ]; then
+            echo "No tag resolved" >&2; exit 1
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - uses: vedantmgoyal9/winget-releaser@main
+        with:
+          identifier: Deliro.Mt
+          version: ${{ steps.t.outputs.tag }}
+          installers-regex: '\.exe$'
+          token: ${{ secrets.WINGET_PAT }}
+          fork-user: deliro
