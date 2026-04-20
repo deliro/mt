@@ -148,10 +148,21 @@ jobs:
           git commit -m "${PKG_ID} ${VERSION}"
           git push --force-with-lease -u origin "$branch"
 
-          gh pr create \
-            --repo microsoft/winget-pkgs \
-            --base master \
-            --head "deliro:${branch}" \
-            --title "${PKG_ID} version ${VERSION}" \
-            --body "Submission of ${PKG_ID} ${VERSION} via release automation. Source: https://github.com/deliro/mt/releases/tag/${TAG}" \
-            || echo "PR may already exist for this version"
+          # Idempotent submission: `gh pr create` fails noisily if a PR already
+          # exists for this branch — treat that as success, propagate anything
+          # else (permission errors, template rejection, etc.) as a real fail.
+          if ! out=$(gh pr create \
+              --repo microsoft/winget-pkgs \
+              --base master \
+              --head "deliro:${branch}" \
+              --title "${PKG_ID} version ${VERSION}" \
+              --body "Submission of ${PKG_ID} ${VERSION} via release automation. Source: https://github.com/deliro/mt/releases/tag/${TAG}" 2>&1); then
+            if echo "$out" | grep -qi "already exists"; then
+              echo "PR already exists for ${branch} — OK"
+            else
+              echo "$out" >&2
+              exit 1
+            fi
+          else
+            echo "$out"
+          fi
