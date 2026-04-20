@@ -2,6 +2,23 @@
 
 All notable user-visible changes are listed here. Dates are UTC.
 
+## [0.2.1](https://github.com/deliro/mt/compare/v0.2.0...v0.2.1) (2026-04-20)
+
+
+### Bug Fixes
+
+* **topology:** restore zoom-blur fallback + harden tile pipeline ([a3a023e](https://github.com/deliro/mt/commit/a3a023ea86d91c2b11b8476c4498ec65242c18d6))
+
+
+### CI
+
+* **release-please:** dispatch release.yml after a release tag is cut ([b782622](https://github.com/deliro/mt/commit/b7826221675346eee41161d2c5feadfabf9d8b31))
+* **release:** allow publish job to run on workflow_dispatch ([92d7539](https://github.com/deliro/mt/commit/92d753943ad005a9cf3697aa12d0bb4535e356e2))
+* **release:** fix homebrew tap empty-repo push, replace winget action ([ac01434](https://github.com/deliro/mt/commit/ac01434c527b4fed4862c28948efc761ab5ed9cb))
+* **release:** linux AppImage + windows portable .exe + homebrew + winget ([def595c](https://github.com/deliro/mt/commit/def595c70e10fbcb42a1c98168b317ec786f04bc))
+* **release:** pass --repo to gh release upload ([2fc0e08](https://github.com/deliro/mt/commit/2fc0e0898a668025cade835d0cd159e7c9f70ea5))
+* **release:** rename AppImage by glob, not by hard-coded mt-* prefix ([bf5315c](https://github.com/deliro/mt/commit/bf5315c1c24553c2cd6ae363d63869f2c2b6f1ee))
+
 ## [0.2.0](https://github.com/deliro/mt/compare/v0.1.0...v0.2.0) (2026-04-19)
 
 
