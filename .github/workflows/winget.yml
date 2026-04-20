@@ -119,7 +119,7 @@ jobs:
           set -euo pipefail
           # Make sure our user has a fork of microsoft/winget-pkgs. The first
           # call creates it if missing; subsequent calls are no-ops.
-          gh repo fork microsoft/winget-pkgs --clone=false --remote=false || true
+          gh repo fork microsoft/winget-pkgs --clone=false || true
 
           # Clone the fork (sparse — winget-pkgs is huge), branch, drop in
           # only our manifest files, push, open PR.
@@ -146,7 +146,11 @@ jobs:
           git config user.name "github-actions[bot]"
           git add "manifests/d/${PUBLISHER}/Mt/${VERSION}"
           git commit -m "${PKG_ID} ${VERSION}"
-          git push --force-with-lease -u origin "$branch"
+          # --force (not --force-with-lease): this branch belongs solely to
+          # the workflow, and in a fresh CI clone we have no local remote
+          # ref for --force-with-lease to compare against, which causes a
+          # "stale info" rejection on the second run.
+          git push --force -u origin "$branch"
 
           # Idempotent submission: `gh pr create` fails noisily if a PR already
           # exists for this branch — treat that as success, propagate anything
