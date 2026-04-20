@@ -2,6 +2,19 @@
 
 All notable user-visible changes are listed here. Dates are UTC.
 
+## [0.2.2](https://github.com/deliro/mt/compare/v0.2.1...v0.2.2) (2026-04-20)
+
+
+### Documentation
+
+* add dual-license texts (Apache-2.0 + MIT) ([5ff0339](https://github.com/deliro/mt/commit/5ff03399059e9d57b773cf03ffae52fdd0bb5dab))
+
+
+### CI
+
+* **release:** pass --repo to gh workflow run + surface real winget errors ([c9ac765](https://github.com/deliro/mt/commit/c9ac76516765a218ea8e609e376b125bec15c98e))
+* **winget:** drop unsupported --remote flag, push with --force ([fb5f95c](https://github.com/deliro/mt/commit/fb5f95c7c4dc955516a28aa6d01a599821b33bb1))
+
 ## [0.2.1](https://github.com/deliro/mt/compare/v0.2.0...v0.2.1) (2026-04-20)
 
 
