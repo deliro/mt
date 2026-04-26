@@ -90,7 +90,7 @@ tokio-util = { version = "0.7", features = ["codec"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 uuid = { version = "1", features = ["v4"] }
-walkers = "0.31"
+walkers = "0.53"
 
 btleplug = "0.12"
 tokio-serial = "5"
